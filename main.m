@@ -8,6 +8,7 @@
 // Also see shotdetect code
 
 //XXX turn all this into an ObjC class
+//XXX also need lossless encoder class - see libavformat/output-example.c
 
 #include "libavformat/avformat.h"
 #include "libswscale/swscale.h"
@@ -81,9 +82,6 @@ int main(int argc, const char *argv[]) {
 
             if (frameFinished) {
                 //XXX sws_scale to convert into RGB
-                //XXX do we have to queue frames so they get rendered in pts order? and synced with audio?
-                //XXX need a chunk of code like this to get proper pts:
-                // http://libav-users.943685.n4.nabble.com/Purpose-of-reordered-opaque-td943839.html
                 printf("got full video frame - packet reordered pts=%lld, pts=%lld dts=%lld\n", pts, packet.pts, packet.dts);
             }
         }
