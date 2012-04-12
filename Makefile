@@ -7,10 +7,10 @@ CC = gcc
 CFLAGS = -Wall -std=c99 -ggdb3 ${FFMPEG_CFLAGS}
 LDFLAGS = ${FFMPEG_LDFLAGS}
 
-OBJS = decoder.o main.o packet_queue.o transcoder.o
+OBJS = decoder.o main.o packet_queue.o rawmedia.o
 
-libav: ${OBJS}
-	${CC} -o libav ${OBJS} ${LDFLAGS}
+rawmedia: ${OBJS}
+	${CC} -o rawmedia ${OBJS} ${LDFLAGS}
 
 clean:
-	rm -f libav ${OBJS}
+	rm -f rawmedia ${OBJS}

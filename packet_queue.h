@@ -1,5 +1,5 @@
-#ifndef PACKET_QUEUE_H
-#define PACKET_QUEUE_H
+#ifndef RM_PACKET_QUEUE_H
+#define RM_PACKET_QUEUE_H
 
 #include <libavformat/avformat.h>
 

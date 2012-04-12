@@ -1,7 +1,7 @@
-#include "transcoder.h"
+#include "rawmedia.h"
 #include <libavformat/avformat.h>
 
-void init_transcoder() {
+void rawmedia_init() {
     av_register_all();
 }
 

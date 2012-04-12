@@ -1,9 +1,9 @@
-#include "transcoder.h"
+#include "rawmedia.h"
 
 int main(int argc, const char *argv[]) {
-    init_transcoder();
-    DecoderContext* ctx = create_decoder_context(argv[1]);
-    decode_video_frame(ctx);
-    destroy_decoder_context(ctx);
+    rawmedia_init();
+    RawMediaDecoder* rmd = rawmedia_create_decoder(argv[1]);
+    rawmedia_decode_video_frame(rmd);
+    rawmedia_destroy_decoder(rmd);
     return 0;
 }
