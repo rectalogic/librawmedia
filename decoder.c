@@ -7,8 +7,6 @@
 
 #include "rawmedia.h"
 #include "packet_queue.h"
-#include <libavformat/avformat.h>
-#include <libswscale/swscale.h>
 
 
 
@@ -16,6 +14,7 @@ static int const INVALID_STREAM = -1;
 
 struct RawMediaDecoder {
     AVFormatContext* format_ctx;
+    AVRational timebase; // Time per frame
 
     int video_stream;
     PacketQueue videoq;
@@ -24,6 +23,8 @@ struct RawMediaDecoder {
     int audio_stream;
     PacketQueue audioq;
     AVFrame* audio_frame;
+    AVPacket audio_pkt;
+    AVPacket audio_pkt_partial;
 };
 
 static int open_decoder(RawMediaDecoder* rmd, int stream) {
@@ -34,15 +35,17 @@ static int open_decoder(RawMediaDecoder* rmd, int stream) {
     AVCodec *codec = avcodec_find_decoder(ctx->codec_id);
     if (codec == NULL)
         return -1;
-    if ((r = avcodec_open2(ctx, codec, NULL)) < 0)
-        return r;
+    // Disable threading, introduces codec delay
+    AVDictionary* opts = NULL;
+    av_dict_set(&opts, "threads", "1", 0);
+    r = avcodec_open2(ctx, codec, &opts);
+    av_dict_free(&opts);
     return r;
 }
 
-//XXX pass in AVRational fps - so we can keep track of what next expected frame is
 //XXX pass start time, need to seek and decode until that time
 //XXX for end/duration, caller can keep track and shut down decoding when done
-RawMediaDecoder* rawmedia_create_decoder(const char* filename) {
+RawMediaDecoder* rawmedia_create_decoder(const char* filename, AVRational framerate, uint32_t start_frame) {
     int r = 0;
     RawMediaDecoder* rmd = av_mallocz(sizeof(RawMediaDecoder));
     AVFormatContext* format_ctx = NULL;
@@ -50,6 +53,8 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename) {
         return NULL;
     packet_queue_init(&rmd->videoq);
     packet_queue_init(&rmd->audioq);
+
+    rmd->timebase = (AVRational){framerate.den, framerate.num};
 
     if ((r = avformat_open_input(&format_ctx, filename, NULL, NULL)) != 0)
         goto error;
@@ -87,6 +92,8 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename) {
     if (rmd->video_stream == INVALID_STREAM && rmd->audio_stream == INVALID_STREAM)
         goto error;
 
+    //XXX seek if start_frame != 0, set next expected video_pts
+
     return rmd;
 error:
     //XXX log result code - need logging hook integration (for av logging too)
@@ -106,6 +113,8 @@ void rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
                 avcodec_close(rmd->format_ctx->streams[rmd->audio_stream]->codec);
                 packet_queue_flush(&rmd->audioq);
                 av_free(rmd->audio_frame);
+                av_free_packet(&rmd->audio_pkt);
+                // Don't free audio_pkt_partial, it's a copy of audio_pkt
             }
 
             avformat_close_input(&rmd->format_ctx);
@@ -141,59 +150,90 @@ static int read_packet(RawMediaDecoder* rmd, int stream, AVPacket* pkt) {
                 return r;
     }
     //XXX on EOF, should send pkt with null data to decoder if CODEC_CAP_DELAY
+    //XXX need more explicit EOF handling - track in context
+    return r;
+}
+
+static int decode_video_frame(RawMediaDecoder* rmd) {
+    int r = 0;
+    AVCodecContext *video_ctx = rmd->format_ctx->streams[rmd->video_stream]->codec;
+    AVPacket pkt;
+    int got_picture = 0;
+    while (!got_picture && (r = read_packet(rmd, rmd->video_stream, &pkt)) >= 0) {
+        avcodec_get_frame_defaults(rmd->video_frame);
+        if ((r = avcodec_decode_video2(video_ctx, rmd->video_frame, &got_picture, &pkt)) < 0)
+            return r;
+        av_free_packet(&pkt);
+    }
     return r;
 }
 
 //XXX or let user pass fixed dimension buffer and swscale into RGB and letterboxed into that buffer
 
 // Return <0 on error or AVERROR_EOF
-int rawmedia_decode_video_frame(RawMediaDecoder* rmd) {
+int rawmedia_decode_video(RawMediaDecoder* rmd) {
     int r = 0;
-    AVCodecContext *video_ctx = rmd->format_ctx->streams[rmd->video_stream]->codec;
-    AVPacket pkt;
-    int got_picture = 0;
-    while (got_picture == 0 && (r = read_packet(rmd, rmd->video_stream, &pkt)) >= 0) {
-        avcodec_get_frame_defaults(rmd->video_frame);
-        if ((r = avcodec_decode_video2(video_ctx, rmd->video_frame, &got_picture, &pkt)) < 0)
-            return r;
 
-        //XXX examine pts (best_effort_timestamp?) and keep decoding until we get the frame we need, then swscale it into callers buffer
-        //XXX depending on framerate, we may need to repeat last frame (i.e. not decode a new one) - this should be OK since we save rmd->video_frame so we have it (would have to rescale though)
+    //XXX check video_frame pts and expected, swscale current frame into output if OK
 
-        av_free_packet(&pkt);
-    }
-    //XXX if got_picture and r>=0, then copy/scale frame to output buffer
-    return r;
- }
-
-#if 0
-int rawmedia_decode_audio_frame(RawMediaDecoder* rmd) {
-    int r = 0;
-    AVCodecContext *audio_ctx = rmd->format_ctx->streams[rmd->audio_stream]->codec;
-    AVPacket pkt;
-    int got_frame;
-    if ((r = read_packet(rmd, rmd->audio_stream, &pkt)) < 0)
+    if ((r = decode_video_frame(rmd)) < 0)
         return r;
 
-    avcodec_get_frame_defaults(rmd->audio_frame);
-    //XXX do we set nb_samples on frame here?
-    //XXX how do we specify samples to decode? and once we got_frame, what if there are samples left in the pkt - need to save it for next decode and continue with partial pkt?
-    //XXX because we might be skipping frames depending what framerate we are pulling video at, so may need to decode more audio?
+    //XXX check video_frame pts, if < expected, loop decoding video frames until we get one we can use - then swscale it into output
 
-    //XXX do we still need pkt_temp? because pkt frees data so modifying it isn't safe below
-    //XXX need to store pkt in context, and pkt_temp offsets into it - so if we fill output buffer but still have data left in pkt we can use it next time around - see avconv, has audio_pkt and audio_pkt_temp in context
-
-    //http://git.libav.org/?p=libav.git;a=commitdiff;h=f199f38573c4c02753f03ba8db04481038fa6f2e
-
-    while (pkt.size > 0) {
-        if ((r = avcodec_decode_audio4(audio_ctx, rmd->audio_frame, &got_frame, &pkt)) < 0)
-            break;
-        pkt.data += r;
-        pkt.size -= r;
-        //XXX check got_frame
-    }
-
-    av_free_packet(&pkt);
     return r;
 }
-#endif
+
+// Decode partial frame.
+// Return <0 on error, 0 if no frame decoded, >0 if frame decoded
+static int decode_partial_audio_frame(RawMediaDecoder* rmd) {
+    int r = 0;
+    AVCodecContext *audio_ctx = rmd->format_ctx->streams[rmd->audio_stream]->codec;
+    AVPacket* pkt = &rmd->audio_pkt;
+    AVPacket* pkt_partial = &rmd->audio_pkt_partial;
+    int got_frame = 0;
+    while (pkt_partial->size > 0) {
+        avcodec_get_frame_defaults(rmd->audio_frame);
+        if ((r = avcodec_decode_audio4(audio_ctx, rmd->audio_frame, &got_frame, pkt_partial)) < 0)
+            return r;
+        pkt_partial->data += r;
+        pkt_partial->size -= r;
+        if (got_frame)
+            return 1;
+    }
+
+    // Partial packet is now empty, reset
+    memset(pkt_partial, 0, sizeof(*pkt_partial));
+    av_free_packet(pkt);
+    return 0;
+}
+
+// Decode a full audio frame.
+// Return <0 on error, >0 when frame decoded.
+static int decode_audio_frame(RawMediaDecoder* rmd) {
+    int r = 0;
+    AVPacket* pkt = &rmd->audio_pkt;
+    AVPacket* pkt_partial = &rmd->audio_pkt_partial;
+    do {
+        // Read anything left in partial, return on error or got frame
+        if ((r = decode_partial_audio_frame(rmd)))
+            return r;
+        // If partial exausted and no frame, read a new packet and try again
+        if ((r = read_packet(rmd, rmd->audio_stream, pkt)) >= 0)
+            *pkt_partial = *pkt;
+    } while (r >= 0);
+    return r;
+}
+
+int rawmedia_decode_audio(RawMediaDecoder* rmd) {
+    int r = 0;
+
+    //XXX need to keep track of offset in audio_frame and resample any partial frame to output
+
+    if ((r = decode_audio_frame(rmd)) < 0)
+        return r;
+
+    //XXX now need to resample from audio_frame to output, and track how much we consumed - and decode another frame if we don't fill output buffer
+
+    return r;
+}
