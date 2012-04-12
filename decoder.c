@@ -151,19 +151,18 @@ int decode_video_frame(DecoderContext* dc) {
     int r = 0;
     AVCodecContext *video_ctx = dc->format_ctx->streams[dc->video_stream]->codec;
     AVPacket pkt;
-    int got_picture;
-    if ((r = read_packet(dc, dc->video_stream, &pkt)) < 0)
-        return r;
+    int got_picture = 0;
+    while (got_picture == 0 && (r = read_packet(dc, dc->video_stream, &pkt)) >= 0) {
+        avcodec_get_frame_defaults(dc->video_frame);
+        if ((r = avcodec_decode_video2(video_ctx, dc->video_frame, &got_picture, &pkt)) < 0)
+            return r;
 
-    avcodec_get_frame_defaults(dc->video_frame);
-    if ((r = avcodec_decode_video2(video_ctx, dc->video_frame, &got_picture, &pkt)) < 0)
-        return r;
+        //XXX examine pts (best_effort_timestamp?) and keep decoding until we get the frame we need, then swscale it into callers buffer
+        //XXX depending on framerate, we may need to repeat last frame (i.e. not decode a new one) - this should be OK since we save dc->video_frame so we have it (would have to rescale though)
 
-    //XXX check got_picture
-    //XXX examine pts (best_effort_timestamp?) and keep decoding until we get the frame we need, then swscale it into callers buffer
-    //XXX depending on framerate, we may need to repeat last frame (i.e. not decode a new one) - this should be OK since we save dc->video_frame so we have it (would have to rescale though)
-
-    av_free_packet(&pkt);
+        av_free_packet(&pkt);
+    }
+    //XXX if got_picture and r>=0, then copy/scale frame to output buffer
     return r;
  }
 
