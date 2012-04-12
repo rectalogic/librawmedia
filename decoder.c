@@ -14,7 +14,8 @@ static int const INVALID_STREAM = -1;
 
 struct RawMediaDecoder {
     AVFormatContext* format_ctx;
-    AVRational timebase; // Time per frame
+    AVRational timebase;        // Time per frame
+    uint32_t expected_frame;    // Next expected frame number to decode
 
     int video_stream;
     PacketQueue videoq;
@@ -56,12 +57,18 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, AVRational framer
 
     rmd->timebase = (AVRational){framerate.den, framerate.num};
 
-    if ((r = avformat_open_input(&format_ctx, filename, NULL, NULL)) != 0)
+    if ((r = avformat_open_input(&format_ctx, filename, NULL, NULL)) != 0) {
+        av_log(NULL, AV_LOG_FATAL,
+               "%s: failed to open (%d)\n", filename, r);
         goto error;
+    }
     rmd->format_ctx = format_ctx;
 
-    if ((r = avformat_find_stream_info(format_ctx, NULL)) < 0)
+    if ((r = avformat_find_stream_info(format_ctx, NULL)) < 0) {
+        av_log(NULL, AV_LOG_FATAL,
+               "%s: failed to find stream info (%d)\n", filename, r);
         goto error;
+    }
 
     rmd->video_stream = INVALID_STREAM;
     rmd->audio_stream = INVALID_STREAM;
@@ -70,29 +77,47 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, AVRational framer
         case AVMEDIA_TYPE_VIDEO:
             if (rmd->video_stream == INVALID_STREAM) {
                 rmd->video_stream = j;
-                if ((r = open_decoder(rmd, rmd->video_stream)) < 0)
+                if ((r = open_decoder(rmd, rmd->video_stream)) < 0) {
+                    av_log(NULL, AV_LOG_FATAL,
+                           "%s: failed to open video decoder\n", filename);
                     goto error;
+                }
                 if (!(rmd->video_frame = avcodec_alloc_frame()))
                     goto error;
             }
+            else
+                format_ctx->streams[j]->discard = AVDISCARD_ALL;
             break;
         case AVMEDIA_TYPE_AUDIO:
             if (rmd->audio_stream == INVALID_STREAM){
                 rmd->audio_stream = j;
-                if ((r = open_decoder(rmd, rmd->audio_stream)) < 0)
+                if ((r = open_decoder(rmd, rmd->audio_stream)) < 0) {
+                    av_log(NULL, AV_LOG_FATAL,
+                           "%s: failed to open audio decoder\n", filename);
                     goto error;
+                }
                 if (!(rmd->audio_frame = avcodec_alloc_frame()))
                     goto error;
             }
+            else
+                format_ctx->streams[j]->discard = AVDISCARD_ALL;
             break;
         default:
+            format_ctx->streams[j]->discard = AVDISCARD_ALL;
             break;
         }
     }
-    if (rmd->video_stream == INVALID_STREAM && rmd->audio_stream == INVALID_STREAM)
+    if (rmd->video_stream == INVALID_STREAM && rmd->audio_stream == INVALID_STREAM) {
+        av_log(NULL, AV_LOG_FATAL, "%s: could not find audio or video stream\n", filename);
         goto error;
+    }
 
-    //XXX seek if start_frame != 0, set next expected video_pts
+    if (start_frame != 0) {
+        rmd->expected_frame = start_frame;
+        int64_t timestamp = av_rescale_q(start_frame, rmd->timebase, AV_TIME_BASE_Q);
+        if (av_seek_frame(format_ctx, -1, timestamp, AVSEEK_FLAG_BACKWARD) < 0)
+            av_log(NULL, AV_LOG_WARNING, "%s: failed to seek\n", filename);
+    }
 
     return rmd;
 error:
