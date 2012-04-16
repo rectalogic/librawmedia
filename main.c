@@ -8,7 +8,8 @@ int main(int argc, const char *argv[]) {
     RawMediaDecoder* rmd = rawmedia_create_decoder(argv[1], &config);
     RawMediaDecoderInfo info;
     rawmedia_get_decoder_info(rmd, &info);
-    rawmedia_decode_video(rmd);
+    uint8_t buffer[info.video_framebuffer_size];
+    rawmedia_decode_video(rmd, buffer);
     rawmedia_decode_audio(rmd);
     rawmedia_destroy_decoder(rmd);
     return 0;

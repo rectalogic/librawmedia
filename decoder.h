@@ -31,7 +31,8 @@ typedef struct RawMediaDecoderInfo {
 RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDecoderConfig* config);
 // Must be called before beginning to decode
 int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* info);
-int rawmedia_decode_video(RawMediaDecoder* rmd);
+// output must be the size indicated in RawMediaDecoderInfo
+int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t* output);
 int rawmedia_decode_audio(RawMediaDecoder* rmd);
 void rawmedia_destroy_decoder(RawMediaDecoder* rmd);
 

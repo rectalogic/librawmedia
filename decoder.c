@@ -5,6 +5,8 @@
 
 //XXX also need lossless encoder class - see libavformat/output-example.c
 
+#include <libavutil/opt.h>
+#include <libswscale/swscale.h>
 #include "rawmedia_internal.h"
 #include "decoder.h"
 #include "packet_queue.h"
@@ -16,7 +18,7 @@ struct RawMediaDecoder {
     AVFormatContext* format_ctx;
     AVRational timebase;
 
-    struct Video {
+    struct RawMediaVideo {
         int stream;
         PacketQueue packetq;
         AVFrame* avframe;
@@ -24,9 +26,10 @@ struct RawMediaDecoder {
         uint32_t frame_duration;    // Frame duration in video timebase
         uint32_t width;
         uint32_t height;
+        struct SwsContext* sws_context;
     } video;
 
-    struct Audio {
+    struct RawMediaAudio {
         int stream;
         PacketQueue packetq;
         AVFrame* avframe;
@@ -153,6 +156,7 @@ void rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
                 avcodec_close(rmd->format_ctx->streams[rmd->video.stream]->codec);
                 packet_queue_flush(&rmd->video.packetq);
                 av_free(rmd->video.avframe);
+                sws_freeContext(rmd->video.sws_context);
             }
             if (rmd->audio.stream != INVALID_STREAM) {
                 avcodec_close(rmd->format_ctx->streams[rmd->audio.stream]->codec);
@@ -194,11 +198,11 @@ int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* i
             info->duration = duration;
         info->video_width = rmd->video.width;
         info->video_height = rmd->video.height;
-#if RAWMEDIA_VIDEO_PIXEL_FORMAT == PIX_FMT_RGB24
-        info->video_framebuffer_size = info->video_width * info->video_height * 3;
-#else
-#error Recompute framebuffer size for new pixel format
-#endif
+        int size = avpicture_get_size(RAWMEDIA_VIDEO_PIXEL_FORMAT,
+                                      info->video_width, info->video_height);
+        if (size <= 0)
+            return -1;
+        info->video_framebuffer_size = (uint32_t)size;
     }
 
     if (rmd->audio.stream != INVALID_STREAM) {
@@ -270,19 +274,49 @@ static int decode_video_frame(RawMediaDecoder* rmd) {
     return r;
 }
 
+static inline int64_t video_frame_pts(RawMediaDecoder* rmd) {
+    return *(int64_t*)av_opt_ptr(avcodec_get_frame_class(), rmd->video.avframe,
+                                 "best_effort_timestamp");
+}
+
+static int scale_video(RawMediaDecoder* rmd, uint8_t* output) {
+    struct RawMediaVideo* video = &rmd->video;
+    AVFrame* frame = video->avframe;
+    rmd->video.sws_context =
+        sws_getCachedContext(video->sws_context,
+                             frame->width, frame->height,
+                             frame->format,
+                             video->width, video->height,
+                             RAWMEDIA_VIDEO_PIXEL_FORMAT,
+                             SWS_LANCZOS|SWS_ACCURATE_RND|SWS_FULL_CHR_H_INT,
+                             NULL, NULL, NULL);
+    if (!video->sws_context)
+        return -1;
+    AVPicture picture;
+    //XXX this returns required image data size - should check it (may not match most compact representation) - probably need to return stride in decoder_infoj
+    avpicture_fill(&picture, output, RAWMEDIA_VIDEO_PIXEL_FORMAT,
+                   video->width, video->height);
+    sws_scale(video->sws_context,
+              (const uint8_t* const*)frame->data, frame->linesize,
+              0, frame->height,
+              picture.data, picture.linesize);
+    return 0;
+}
+
 //XXX for audio/video, continue returning frames after EOF (silence for audio, last frame for video) - caller knows duration and should stop when they want
 
 // Return <0 on error or AVERROR_EOF
-int rawmedia_decode_video(RawMediaDecoder* rmd) {
+int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t* output) {
     int r = 0;
     int64_t expected_pts = rmd->video.current_frame * rmd->video.frame_duration;
 
-    //XXX check video_frame pts and expected, swscale current frame into output if OK
+    while (expected_pts > video_frame_pts(rmd)) {
+        if ((r = decode_video_frame(rmd)) < 0)
+            return r;
+    }
 
-    if ((r = decode_video_frame(rmd)) < 0)
+    if ((r = scale_video(rmd, output)) < 0)
         return r;
-
-    //XXX check video_frame pts, if < expected, loop decoding video frames until we get one we can use - then swscale it into output
 
     rmd->video.current_frame++;
     return r;
