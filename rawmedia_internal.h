@@ -1,0 +1,13 @@
+#ifndef RM_RAWMEDIA_INTERNAL_H
+#define RM_RAWMEDIA_INTERNAL_H
+
+#include <libavcodec/avcodec.h>
+
+// Formats decoded by decoder and expected by encoder
+#define RAWMEDIA_VIDEO_PIXEL_FORMAT PIX_FMT_RGB24
+#define RAWMEDIA_AUDIO_SAMPLE_RATE 44100
+#define RAWMEDIA_AUDIO_SAMPLE_FMT AV_SAMPLE_FMT_S16
+#define RAWMEDIA_AUDIO_CHANNELS 2
+#define RAWMEDIA_AUDIO_CHANNEL_LAYOUT AV_CH_LAYOUT_STEREO
+
+#endif

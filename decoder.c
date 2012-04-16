@@ -5,25 +5,31 @@
 
 //XXX also need lossless encoder class - see libavformat/output-example.c
 
-#include "rawmedia.h"
+#include "rawmedia_internal.h"
+#include "decoder.h"
 #include "packet_queue.h"
 
 
+#define INVALID_STREAM -1
 
-static int const INVALID_STREAM = -1;
-
+//XXX split these into nested audio/video struct and rename members
 struct RawMediaDecoder {
     AVFormatContext* format_ctx;
-    AVRational timebase;        // Time per frame
-    uint32_t expected_frame;    // Next expected frame number to decode
+    AVRational timebase;
 
     int video_stream;
     PacketQueue videoq;
     AVFrame* video_frame;
+    uint32_t video_next_frame;
+    uint32_t video_frame_duration;    // Frame duration in video timebase
+    uint32_t video_width;
+    uint32_t video_height;
 
     int audio_stream;
     PacketQueue audioq;
     AVFrame* audio_frame;
+    uint32_t audio_next_frame;
+    uint32_t audio_frame_duration;    // Frame duration in audio timebase
     AVPacket audio_pkt;
     AVPacket audio_pkt_partial;
 };
@@ -44,18 +50,17 @@ static int open_decoder(RawMediaDecoder* rmd, int stream) {
     return r;
 }
 
-//XXX pass start time, need to seek and decode until that time
-//XXX for end/duration, caller can keep track and shut down decoding when done
-RawMediaDecoder* rawmedia_create_decoder(const char* filename, AVRational framerate, uint32_t start_frame) {
+RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDecoderConfig* config) {
     int r = 0;
     RawMediaDecoder* rmd = av_mallocz(sizeof(RawMediaDecoder));
     AVFormatContext* format_ctx = NULL;
     if (!rmd)
         return NULL;
-    packet_queue_init(&rmd->videoq);
-    packet_queue_init(&rmd->audioq);
 
-    rmd->timebase = (AVRational){framerate.den, framerate.num};
+    rmd->video_stream = INVALID_STREAM;
+    rmd->audio_stream = INVALID_STREAM;
+
+    rmd->timebase = (AVRational){config->framerate.den, config->framerate.num};
 
     if ((r = avformat_open_input(&format_ctx, filename, NULL, NULL)) != 0) {
         av_log(NULL, AV_LOG_FATAL,
@@ -70,12 +75,11 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, AVRational framer
         goto error;
     }
 
-    rmd->video_stream = INVALID_STREAM;
-    rmd->audio_stream = INVALID_STREAM;
     for (int j = 0; j < format_ctx->nb_streams; j++) {
-        switch (format_ctx->streams[j]->codec->codec_type) {
+        AVStream* stream = format_ctx->streams[j];
+        switch (stream->codec->codec_type) {
         case AVMEDIA_TYPE_VIDEO:
-            if (rmd->video_stream == INVALID_STREAM) {
+            if (!config->discard_video && rmd->video_stream == INVALID_STREAM) {
                 rmd->video_stream = j;
                 if ((r = open_decoder(rmd, rmd->video_stream)) < 0) {
                     av_log(NULL, AV_LOG_FATAL,
@@ -84,12 +88,23 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, AVRational framer
                 }
                 if (!(rmd->video_frame = avcodec_alloc_frame()))
                     goto error;
+                rmd->video_frame_duration = av_rescale_q(1, rmd->timebase, stream->time_base);
+                rmd->video_next_frame = config->start_frame;
+
+                //XXX if we add support for config bounding box, take it into account here
+                rmd->video_height = stream->codec->height;
+                if (stream->sample_aspect_ratio.num) {
+                    float aspect_ratio = av_q2d(stream->sample_aspect_ratio);
+                    rmd->video_width = (uint32_t)rint(rmd->video_height * aspect_ratio);
+                }
+                else
+                    rmd->video_width = stream->codec->width;
             }
             else
                 format_ctx->streams[j]->discard = AVDISCARD_ALL;
             break;
         case AVMEDIA_TYPE_AUDIO:
-            if (rmd->audio_stream == INVALID_STREAM){
+            if (!config->discard_audio && rmd->audio_stream == INVALID_STREAM){
                 rmd->audio_stream = j;
                 if ((r = open_decoder(rmd, rmd->audio_stream)) < 0) {
                     av_log(NULL, AV_LOG_FATAL,
@@ -98,6 +113,8 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, AVRational framer
                 }
                 if (!(rmd->audio_frame = avcodec_alloc_frame()))
                     goto error;
+                rmd->audio_frame_duration = av_rescale_q(1, rmd->timebase, stream->time_base);
+                rmd->audio_next_frame = config->start_frame;
             }
             else
                 format_ctx->streams[j]->discard = AVDISCARD_ALL;
@@ -112,14 +129,14 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, AVRational framer
         goto error;
     }
 
-    if (start_frame != 0) {
-        rmd->expected_frame = start_frame;
-        int64_t timestamp = av_rescale_q(start_frame, rmd->timebase, AV_TIME_BASE_Q);
+    if (config->start_frame != 0) {
+        int64_t timestamp = av_rescale_q(config->start_frame, rmd->timebase, AV_TIME_BASE_Q);
         if (av_seek_frame(format_ctx, -1, timestamp, AVSEEK_FLAG_BACKWARD) < 0)
             av_log(NULL, AV_LOG_WARNING, "%s: failed to seek\n", filename);
     }
 
     return rmd;
+
 error:
     //XXX log result code - need logging hook integration (for av logging too)
     rawmedia_destroy_decoder(rmd);
@@ -146,6 +163,63 @@ void rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
         }
         av_free(rmd);
     }
+}
+
+static int64_t stream_duration_frames(const RawMediaDecoder* rmd, int stream, uint32_t stream_frame_duration, uint32_t start_frame) {
+    if (stream != INVALID_STREAM) {
+        int64_t duration = rmd->format_ctx->streams[stream]->duration;
+        int64_t frames = duration / stream_frame_duration;
+        // Round up if partial frame
+        if (duration % stream_frame_duration)
+            frames++;
+        frames -= start_frame;
+        return frames;
+    }
+    else
+        return 0;
+}
+
+int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* info) {
+    *info = (RawMediaDecoderInfo){0};
+
+    if (rmd->video_stream != INVALID_STREAM) {
+        info->has_video = 1;
+        int64_t duration = stream_duration_frames(rmd, rmd->video_stream,
+                                                  rmd->video_frame_duration,
+                                                  rmd->video_next_frame);
+        if (info->duration < duration)
+            info->duration = duration;
+        info->video_width = rmd->video_width;
+        info->video_height = rmd->video_height;
+#if RAWMEDIA_VIDEO_PIXEL_FORMAT == PIX_FMT_RGB24
+        info->video_framebuffer_size = info->video_width * info->video_height * 3;
+#else
+#error Recompute framebuffer size for new pixel format
+#endif
+    }
+
+    if (rmd->audio_stream != INVALID_STREAM) {
+        info->has_audio = 1;
+        int64_t duration = stream_duration_frames(rmd, rmd->audio_stream,
+                                                  rmd->audio_frame_duration,
+                                                  rmd->audio_next_frame);
+        if (info->duration < duration)
+            info->duration = duration;
+
+        // How many samples per frame at our target framerate
+        //XXX probably need this in rmd for when we are decoding
+        int64_t samples = av_rescale_q(1,
+                                       rmd->timebase,
+                                       (AVRational){1, RAWMEDIA_AUDIO_SAMPLE_RATE});
+
+        int size = av_samples_get_buffer_size(NULL, RAWMEDIA_AUDIO_CHANNELS,
+                                              (int)samples,
+                                              RAWMEDIA_AUDIO_SAMPLE_FMT, 1);
+        if (size <= 0)
+            return -1;
+        info->audio_framebuffer_size = (uint32_t)size;
+    }
+    return 0;
 }
 
 // Read a packet from the indicated stream.
@@ -193,11 +267,12 @@ static int decode_video_frame(RawMediaDecoder* rmd) {
     return r;
 }
 
-//XXX or let user pass fixed dimension buffer and swscale into RGB and letterboxed into that buffer
+//XXX for audio/video, continue returning frames after EOF (silence for audio, last frame for video) - caller knows duration and should stop when they want
 
 // Return <0 on error or AVERROR_EOF
 int rawmedia_decode_video(RawMediaDecoder* rmd) {
     int r = 0;
+    int64_t expected_pts = rmd->video_next_frame * rmd->video_frame_duration;
 
     //XXX check video_frame pts and expected, swscale current frame into output if OK
 
@@ -206,6 +281,7 @@ int rawmedia_decode_video(RawMediaDecoder* rmd) {
 
     //XXX check video_frame pts, if < expected, loop decoding video frames until we get one we can use - then swscale it into output
 
+    rmd->video_next_frame++;
     return r;
 }
 
@@ -252,6 +328,7 @@ static int decode_audio_frame(RawMediaDecoder* rmd) {
 
 int rawmedia_decode_audio(RawMediaDecoder* rmd) {
     int r = 0;
+    int64_t expected_pts = rmd->audio_next_frame * rmd->audio_frame_duration;
 
     //XXX need to keep track of offset in audio_frame and resample any partial frame to output
 
@@ -260,5 +337,6 @@ int rawmedia_decode_audio(RawMediaDecoder* rmd) {
 
     //XXX now need to resample from audio_frame to output, and track how much we consumed - and decode another frame if we don't fill output buffer
 
+    rmd->audio_next_frame++;
     return r;
 }
