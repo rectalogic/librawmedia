@@ -7,6 +7,7 @@
 
 #include <libavutil/opt.h>
 #include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
 #include "rawmedia_internal.h"
 #include "decoder.h"
 #include "packet_queue.h"
@@ -26,7 +27,7 @@ struct RawMediaDecoder {
         uint32_t frame_duration;    // Frame duration in video timebase
         uint32_t width;
         uint32_t height;
-        struct SwsContext* sws_context;
+        struct SwsContext* sws_ctx;
     } video;
 
     struct RawMediaAudio {
@@ -37,6 +38,7 @@ struct RawMediaDecoder {
         uint32_t frame_duration;    // Frame duration in audio timebase
         AVPacket pkt;
         AVPacket pkt_partial;
+        struct SwrContext* swr_ctx;
     } audio;
 };
 
@@ -54,6 +56,31 @@ static int open_decoder(RawMediaDecoder* rmd, int stream) {
     r = avcodec_open2(ctx, codec, &opts);
     av_dict_free(&opts);
     return r;
+}
+
+static int create_audio_resample_ctx(RawMediaDecoder* rmd) {
+    struct RawMediaAudio* audio = &rmd->audio;
+    AVCodecContext *audio_ctx = rmd->format_ctx->streams[audio->stream]->codec;
+    int64_t channel_layout = (audio_ctx->channel_layout
+                              && audio_ctx->channels == av_get_channel_layout_nb_channels(audio_ctx->channel_layout))
+        ? audio_ctx->channel_layout
+        : av_get_default_channel_layout(audio_ctx->channels);
+
+    audio->swr_ctx =
+        swr_alloc_set_opts(NULL,
+                           RAWMEDIA_AUDIO_CHANNEL_LAYOUT,
+                           RAWMEDIA_AUDIO_SAMPLE_FMT,
+                           RAWMEDIA_AUDIO_SAMPLE_RATE,
+                           channel_layout,
+                           audio_ctx->sample_fmt,
+                           audio_ctx->sample_rate,
+                           0, NULL);
+    if (!audio->swr_ctx || swr_init(audio->swr_ctx) < 0) {
+        av_log(NULL, AV_LOG_ERROR,
+               "Failed to create audio resampling context\n");
+        return -1;
+    }
+    return 0;
 }
 
 RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDecoderConfig* config) {
@@ -109,6 +136,7 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
             else
                 format_ctx->streams[j]->discard = AVDISCARD_ALL;
             break;
+
         case AVMEDIA_TYPE_AUDIO:
             if (!config->discard_audio && rmd->audio.stream == INVALID_STREAM){
                 rmd->audio.stream = j;
@@ -121,6 +149,9 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
                     goto error;
                 rmd->audio.frame_duration = av_rescale_q(1, rmd->timebase, stream->time_base);
                 rmd->audio.current_frame = config->start_frame;
+
+                if (create_audio_resample_ctx(rmd) < 0)
+                    goto error;
             }
             else
                 format_ctx->streams[j]->discard = AVDISCARD_ALL;
@@ -156,14 +187,15 @@ void rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
                 avcodec_close(rmd->format_ctx->streams[rmd->video.stream]->codec);
                 packet_queue_flush(&rmd->video.packetq);
                 av_free(rmd->video.avframe);
-                sws_freeContext(rmd->video.sws_context);
+                sws_freeContext(rmd->video.sws_ctx);
             }
             if (rmd->audio.stream != INVALID_STREAM) {
                 avcodec_close(rmd->format_ctx->streams[rmd->audio.stream]->codec);
                 packet_queue_flush(&rmd->audio.packetq);
                 av_free(rmd->audio.avframe);
-                av_free_packet(&rmd->audio.pkt);
                 // Don't free audio.pkt_partial, it's a copy of audio.pkt
+                av_free_packet(&rmd->audio.pkt);
+                swr_free(&rmd->audio.swr_ctx);
             }
 
             avformat_close_input(&rmd->format_ctx);
@@ -198,6 +230,7 @@ int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* i
             info->duration = duration;
         info->video_width = rmd->video.width;
         info->video_height = rmd->video.height;
+        //XXX avpicture_fill may not use this size (may use different stride)
         int size = avpicture_get_size(RAWMEDIA_VIDEO_PIXEL_FORMAT,
                                       info->video_width, info->video_height);
         if (size <= 0)
@@ -219,7 +252,8 @@ int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* i
                                        rmd->timebase,
                                        (AVRational){1, RAWMEDIA_AUDIO_SAMPLE_RATE});
 
-        int size = av_samples_get_buffer_size(NULL, RAWMEDIA_AUDIO_CHANNELS,
+        int size = av_samples_get_buffer_size(NULL,
+                                              av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT),
                                               (int)samples,
                                               RAWMEDIA_AUDIO_SAMPLE_FMT, 1);
         if (size <= 0)
@@ -282,21 +316,20 @@ static inline int64_t video_frame_pts(RawMediaDecoder* rmd) {
 static int scale_video(RawMediaDecoder* rmd, uint8_t* output) {
     struct RawMediaVideo* video = &rmd->video;
     AVFrame* frame = video->avframe;
-    rmd->video.sws_context =
-        sws_getCachedContext(video->sws_context,
+    rmd->video.sws_ctx =
+        sws_getCachedContext(video->sws_ctx,
                              frame->width, frame->height,
                              frame->format,
                              video->width, video->height,
                              RAWMEDIA_VIDEO_PIXEL_FORMAT,
                              SWS_LANCZOS|SWS_ACCURATE_RND|SWS_FULL_CHR_H_INT,
                              NULL, NULL, NULL);
-    if (!video->sws_context)
+    if (!video->sws_ctx)
         return -1;
     AVPicture picture;
-    //XXX this returns required image data size - should check it (may not match most compact representation) - probably need to return stride in decoder_infoj
     avpicture_fill(&picture, output, RAWMEDIA_VIDEO_PIXEL_FORMAT,
                    video->width, video->height);
-    sws_scale(video->sws_context,
+    sws_scale(video->sws_ctx,
               (const uint8_t* const*)frame->data, frame->linesize,
               0, frame->height,
               picture.data, picture.linesize);
@@ -363,11 +396,21 @@ static int decode_audio_frame(RawMediaDecoder* rmd) {
     return r;
 }
 
+static int resample_audio(RawMediaDecoder* rmd) {
+    struct RawMediaAudio* audio = &rmd->audio;
+    AVFrame* frame = audio->avframe;
+    AVCodecContext *audio_ctx = rmd->format_ctx->streams[audio->stream]->codec;
+    //XXX
+    return 0;
+}
+
 int rawmedia_decode_audio(RawMediaDecoder* rmd) {
     int r = 0;
     int64_t expected_pts = rmd->audio.current_frame * rmd->audio.frame_duration;
 
     //XXX need to keep track of offset in audio_frame and resample any partial frame to output
+
+    //XXX need to discard samples until we get to start time, and then use *all* samples from then on
 
     if ((r = decode_audio_frame(rmd)) < 0)
         return r;
