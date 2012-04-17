@@ -25,8 +25,8 @@ struct RawMediaDecoder {
         AVFrame* avframe;
         uint32_t current_frame;
         uint32_t frame_duration;    // Frame duration in video timebase
-        uint32_t width;
-        uint32_t height;
+        int32_t width;
+        int32_t height;
         struct SwsContext* sws_ctx;
     } video;
 
@@ -34,8 +34,8 @@ struct RawMediaDecoder {
         int stream;
         PacketQueue packetq;
         AVFrame* avframe;
-        uint32_t current_frame;
-        uint32_t frame_duration;    // Frame duration in audio timebase
+        int64_t current_frame;
+        int32_t frame_duration;    // Frame duration in audio timebase
         AVPacket pkt;
         AVPacket pkt_partial;
         struct SwrContext* swr_ctx;
@@ -128,7 +128,7 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
                 rmd->video.height = stream->codec->height;
                 if (stream->sample_aspect_ratio.num) {
                     float aspect_ratio = av_q2d(stream->sample_aspect_ratio);
-                    rmd->video.width = (uint32_t)rint(rmd->video.height * aspect_ratio);
+                    rmd->video.width = rint(rmd->video.height * aspect_ratio);
                 }
                 else
                     rmd->video.width = stream->codec->width;
@@ -235,7 +235,7 @@ int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* i
                                       info->video_width, info->video_height);
         if (size <= 0)
             return -1;
-        info->video_framebuffer_size = (uint32_t)size;
+        info->video_framebuffer_size = size;
     }
 
     if (rmd->audio.stream != INVALID_STREAM) {
@@ -252,13 +252,12 @@ int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* i
                                        rmd->timebase,
                                        (AVRational){1, RAWMEDIA_AUDIO_SAMPLE_RATE});
 
-        int size = av_samples_get_buffer_size(NULL,
-                                              av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT),
-                                              (int)samples,
+        int nb_channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
+        int size = av_samples_get_buffer_size(NULL, nb_channels, (int)samples,
                                               RAWMEDIA_AUDIO_SAMPLE_FMT, 1);
         if (size <= 0)
             return -1;
-        info->audio_framebuffer_size = (uint32_t)size;
+        info->audio_framebuffer_size = size;
     }
     return 0;
 }
@@ -294,6 +293,11 @@ static int read_packet(RawMediaDecoder* rmd, int stream, AVPacket* pkt) {
     return r;
 }
 
+static inline int64_t frame_pts(AVFrame* avframe) {
+    return *(int64_t*)av_opt_ptr(avcodec_get_frame_class(), avframe,
+                                 "best_effort_timestamp");
+}
+
 static int decode_video_frame(RawMediaDecoder* rmd) {
     int r = 0;
     AVCodecContext *video_ctx = rmd->format_ctx->streams[rmd->video.stream]->codec;
@@ -306,11 +310,6 @@ static int decode_video_frame(RawMediaDecoder* rmd) {
         av_free_packet(&pkt);
     }
     return r;
-}
-
-static inline int64_t video_frame_pts(RawMediaDecoder* rmd) {
-    return *(int64_t*)av_opt_ptr(avcodec_get_frame_class(), rmd->video.avframe,
-                                 "best_effort_timestamp");
 }
 
 static int scale_video(RawMediaDecoder* rmd, uint8_t* output) {
@@ -343,7 +342,7 @@ int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t* output) {
     int r = 0;
     int64_t expected_pts = rmd->video.current_frame * rmd->video.frame_duration;
 
-    while (expected_pts > video_frame_pts(rmd)) {
+    while (expected_pts > frame_pts(rmd->video.avframe)) {
         if ((r = decode_video_frame(rmd)) < 0)
             return r;
     }

@@ -20,12 +20,12 @@ typedef struct RawMediaDecoderInfo {
     uint32_t duration;                  // Duration in frames (max duration of audio and video), reduced by start_frame
 
     int has_video;
-    uint32_t video_framebuffer_size;    // Frame buffer size in bytes
-    uint32_t video_width;
-    uint32_t video_height;
+    int video_framebuffer_size;    // Frame buffer size in bytes
+    int video_width;
+    int video_height;
 
     int has_audio;
-    uint32_t audio_framebuffer_size;    // Frame buffer size in bytes
+    int audio_framebuffer_size;    // Frame buffer size in bytes
 } RawMediaDecoderInfo;
 
 RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDecoderConfig* config);
