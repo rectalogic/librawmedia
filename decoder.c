@@ -43,7 +43,7 @@ struct RawMediaDecoder {
 
 static inline int64_t frame_pts(AVFrame* avframe);
 static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts);
-static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample, int64_t frame_duration);
+static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample);
 
 static inline AVStream* get_avstream(const RawMediaDecoder* rmd, int stream) {
     return rmd->format_ctx->streams[stream];
@@ -112,23 +112,19 @@ static int initial_seek(RawMediaDecoder* rmd, const char* filename) {
     if (rmd->audio.stream != INVALID_STREAM) {
         AVRational audio_time_base = get_avstream(rmd, rmd->audio.stream)->time_base;
         AVRational video_time_base = get_avstream(rmd, rmd->video.stream)->time_base;
-        int64_t audio_pts = 0;
+        int64_t first_audio_sample = 0;
         if (video_pts != -1) {
-            audio_pts = av_rescale_q(video_pts, video_time_base,
-                                     audio_time_base);
+            first_audio_sample = av_rescale_q(video_pts, video_time_base,
+                                              audio_time_base);
         }
         else {
-            audio_pts = av_rescale_q(rmd->start_frame, rmd->time_base,
-                                     audio_time_base);
+            first_audio_sample = av_rescale_q(rmd->start_frame, rmd->time_base,
+                                              audio_time_base);
         }
-        int64_t audio_samples_per_frame = av_rescale_q(1, rmd->time_base,
-                                                       audio_time_base);
-        if ((r = first_audio_frame(rmd, audio_pts, audio_samples_per_frame)) < 0) {
+        if ((r = first_audio_frame(rmd, first_audio_sample)) < 0) {
             av_log(NULL, AV_LOG_FATAL, "%s: failed to seek audio\n", filename);
             return r;
         }
-        //XXX offset audio avframe data/nb_samples?? need to offset each data element? gah, planar can also have data in extradata
-        //XXX use local buffer and resample nb_samples into it until we've exausted it? and input will be buffered in resampler?
     }
     return r;
 }
@@ -201,8 +197,7 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
                     goto error;
                 // How many samples per frame at our target framerate/samplerate
                 rmd->audio.output_samples_per_frame =
-                    av_rescale_q(1, rmd->time_base,
-                                 (AVRational){1, RAWMEDIA_AUDIO_SAMPLE_RATE});
+                    av_rescale_q(1, rmd->time_base, RAWMEDIA_AUDIO_TIME_BASE);
 
                 if (create_audio_resample_ctx(rmd) < 0) {
                     av_log(NULL, AV_LOG_ERROR,
@@ -447,28 +442,54 @@ static int decode_audio_frame(RawMediaDecoder* rmd) {
     return r;
 }
 
-static int resample_audio(RawMediaDecoder* rmd) {
-    struct RawMediaAudio* audio = &rmd->audio;
-    AVFrame* avframe = audio->avframe;
-    AVCodecContext *audio_ctx = get_avstream(rmd, audio->stream)->codec;
-    //XXX (const uint8_t**)avframe->data
-    return 0;
+static inline int resample_audio(RawMediaDecoder* rmd, uint8_t **out, int out_count, const uint8_t **in , int in_count) {
+    return swr_convert(rmd->audio.swr_ctx, out, out_count, in, in_count);
 }
 
-// Decode audio frames until we reach the frame that contains our starting sample
+// Discard all input audio samples up until start_sample.
 // start_sample and samples_per_frame are both in source audio timebase
-static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample, int64_t samples_per_frame) {
+static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample) {
     int r = 0;
+    AVRational audio_time_base = get_avstream(rmd, rmd->audio.stream)->time_base;
+    int64_t samples_per_frame = av_rescale_q(1, rmd->time_base, audio_time_base);
     int64_t end_sample = start_sample + samples_per_frame - 1;
+    int decoded_nb_samples = 0;
     for (;;) {
-        int64_t audio_pts = frame_pts(rmd->audio.avframe);
         //XXX handle EOF - pts won't increment after EOF (same for video)
-        if (start_sample <= audio_pts && audio_pts <= end_sample)
-            return 0;
+        if (start_sample <= decoded_nb_samples && decoded_nb_samples <= end_sample)
+            break;
         if ((r = decode_audio_frame(rmd)) < 0)
             return r;
+        decoded_nb_samples += rmd->audio.avframe->nb_samples;
     }
-    return -1;
+
+    int discard_input_nb_samples = decoded_nb_samples - start_sample;
+    if (discard_input_nb_samples <= 0)
+        return r;
+
+    int discard_output_nb_samples =
+        av_rescale_q(discard_input_nb_samples, audio_time_base,
+                     RAWMEDIA_AUDIO_TIME_BASE);
+
+    int nb_channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
+    int bufsize = av_samples_get_buffer_size(NULL, nb_channels,
+                                             discard_output_nb_samples,
+                                             RAWMEDIA_AUDIO_SAMPLE_FMT, 1);
+    uint8_t buf[bufsize];
+    uint8_t *output[] = { buf };
+
+    const uint8_t** input = (const uint8_t**)rmd->audio.avframe->data;
+    int input_nb_samples = rmd->audio.avframe->nb_samples;
+
+    // Resampler will buffer unused input samples if needed.
+    while ((r = resample_audio(rmd, output, discard_output_nb_samples,
+                               input, input_nb_samples)) > 0) {
+        input = NULL;
+        input_nb_samples = 0;
+        discard_output_nb_samples -= r;
+    }
+
+    return r;
 }
 
 int rawmedia_decode_audio(RawMediaDecoder* rmd) {
