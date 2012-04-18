@@ -442,10 +442,6 @@ static int decode_audio_frame(RawMediaDecoder* rmd) {
     return r;
 }
 
-static inline int resample_audio(RawMediaDecoder* rmd, uint8_t **out, int out_count, const uint8_t **in , int in_count) {
-    return swr_convert(rmd->audio.swr_ctx, out, out_count, in, in_count);
-}
-
 // Discard all input audio samples up until start_sample.
 // start_sample and samples_per_frame are both in source audio timebase
 static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample) {
@@ -482,8 +478,9 @@ static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample) {
     int input_nb_samples = rmd->audio.avframe->nb_samples;
 
     // Resampler will buffer unused input samples if needed.
-    while ((r = resample_audio(rmd, output, discard_output_nb_samples,
-                               input, input_nb_samples)) > 0) {
+    while ((r = swr_convert(rmd->audio.swr_ctx,
+                            output, discard_output_nb_samples,
+                            input, input_nb_samples)) > 0) {
         input = NULL;
         input_nb_samples = 0;
         discard_output_nb_samples -= r;
@@ -492,26 +489,42 @@ static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample) {
     return r;
 }
 
-int rawmedia_decode_audio(RawMediaDecoder* rmd) {
+// Resample input, can be NULL/0 to drain resampler buffer.
+// output/output_nb_samples will be updated.
+static int resample_audio(RawMediaDecoder* rmd, uint8_t **output, int* output_nb_samples, const uint8_t **input, int input_nb_samples) {
     int r = 0;
-    //XXX current_frame should be start_sample and in source timebase
-    //XXX frame_duration should be samples_per_frame and in output timebase
-    //XXX so we can resample into output until we hit samples_per_frame
-    //XXX will need to offset into AVFrame for start_sample - need conversion from fmt/samplerate/channels to byte offset
+    int bytes_per_sample = av_get_bytes_per_sample(RAWMEDIA_AUDIO_SAMPLE_FMT)
+        * av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
 
-    //XXX need to keep track of offset in audio_frame and resample any partial frame to output
+    uint8_t *outbuf[] = { *output };
 
-    //XXX need to discard samples until we get to start time, and then use *all* samples from then on
-    //XXX swr_convert buffers input if too much input for output buffer
+    while (*output_nb_samples > 0
+           && (r = swr_convert(rmd->audio.swr_ctx, outbuf, *output_nb_samples,
+                               input, input_nb_samples)) > 0) {
+        input = NULL;
+        input_nb_samples = 0;
+        *output += r * bytes_per_sample;
+        outbuf[0] = *output;
+        *output_nb_samples -= r;
+    }
+    return r;
+}
 
-    //XXX can we lose sync? if video source fps is different than decoding fps, we may start on a "half" frame but start the audio on the full frame
+int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output) {
+    int r = 0;
+    int output_nb_samples = rmd->audio.output_samples_per_frame;
 
-    //XXX should we seek/preroll a/v when we create decoder? then can adjust audio based on what happened with video, and decode methods don't need to deal with it
-
-    if ((r = decode_audio_frame(rmd)) < 0)
+    // Drain resampler buffer
+    if ((r = resample_audio(rmd, &output, &output_nb_samples, NULL, 0)) < 0)
         return r;
 
-    //XXX now need to resample from audio_frame to output, and track how much we consumed - and decode another frame if we don't fill output buffer
+    while (output_nb_samples > 0 && (r = decode_audio_frame(rmd)) > 0) {
+        const uint8_t** input = (const uint8_t**)rmd->audio.avframe->data;
+        int input_nb_samples = rmd->audio.avframe->nb_samples;
 
+        if ((r = resample_audio(rmd, &output, &output_nb_samples,
+                                input, input_nb_samples)) < 0)
+            return r;
+    }
     return r;
 }

@@ -33,7 +33,7 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
 int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* info);
 // output must be the size indicated in RawMediaDecoderInfo
 int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t* output);
-int rawmedia_decode_audio(RawMediaDecoder* rmd);
+int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output);
 void rawmedia_destroy_decoder(RawMediaDecoder* rmd);
 
 #endif
