@@ -1,8 +1,8 @@
 #include "rawmedia.h"
-#include "decoder.h"
 #include <stdio.h>
 
-#define FRAME_RATE ((AVRational){30,1})
+#define FRAME_RATE_NUM 30
+#define FRAME_RATE_DEN 1
 #define START_FRAME 15
 #define OUTPUT_FRAMES 300
 
@@ -16,7 +16,8 @@ int main(int argc, const char *argv[]) {
     const char* video_filename = argv[3];
 
     rawmedia_init();
-    RawMediaDecoderConfig config = { .framerate = FRAME_RATE,
+    RawMediaDecoderConfig config = { .framerate_num = FRAME_RATE_NUM,
+                                     .framerate_den = FRAME_RATE_DEN,
                                      .start_frame = START_FRAME };
     RawMediaDecoder* rmd = rawmedia_create_decoder(filename, &config);
     if (!rmd)

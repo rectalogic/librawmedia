@@ -3,8 +3,8 @@
 #include <libavutil/opt.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
+#include "rawmedia.h"
 #include "rawmedia_internal.h"
-#include "decoder.h"
 #include "packet_queue.h"
 
 #define INVALID_STREAM -1
@@ -143,7 +143,7 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
     rmd->audio.stream_index = INVALID_STREAM;
     rmd->start_frame = config->start_frame;
 
-    rmd->time_base = (AVRational){config->framerate.den, config->framerate.num};
+    rmd->time_base = (AVRational){config->framerate_den, config->framerate_num};
 
     if ((r = avformat_open_input(&format_ctx, filename, NULL, NULL)) != 0) {
         av_log(NULL, AV_LOG_FATAL,
