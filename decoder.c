@@ -1,8 +1,3 @@
-// gcc -std=c99 -ggdb3 $(/opt/motionbox/foundation/5.4.8/bin/pkg-config --cflags --libs libavcodec libavformat libavcore libavutil libswscale) -o decoder decoder.c
-
-// See http://web.me.com/dhoerl/Home/Tech_Blog/Entries/2009/1/22_Revised_avcodec_sample.c.html
-// Also see shotdetect code
-
 //XXX also need lossless encoder class - see libavformat/output-example.c
 
 #include <libavutil/opt.h>
@@ -13,6 +8,12 @@
 #include "packet_queue.h"
 
 #define INVALID_STREAM -1
+
+enum StreamStatus {
+    SS_EOF_PENDING = -1,
+    SS_NORMAL = 0,
+    SS_EOF = 1,
+};
 
 struct RawMediaDecoder {
     AVFormatContext* format_ctx;
@@ -25,9 +26,10 @@ struct RawMediaDecoder {
         AVFrame* avframe;
         uint32_t current_frame;     // Frame number we are decoding
         uint32_t frame_duration;    // Frame duration in video timebase
-        int32_t width;
-        int32_t height;
+        int width;
+        int height;
         struct SwsContext* sws_ctx;
+        enum StreamStatus status;
     } video;
 
     struct RawMediaAudio {
@@ -38,6 +40,7 @@ struct RawMediaDecoder {
         AVPacket pkt;
         AVPacket pkt_partial;
         struct SwrContext* swr_ctx;
+        enum StreamStatus status;
     } audio;
 };
 
@@ -225,7 +228,6 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
     return rmd;
 
 error:
-    //XXX log result code - need logging hook integration (for av logging too)
     rawmedia_destroy_decoder(rmd);
     return NULL;
 }
@@ -255,7 +257,7 @@ void rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
 }
 
 // Stream duration in output frames
-static int64_t output_stream_duration(const RawMediaDecoder* rmd, int stream, uint32_t start_frame) {
+static int64_t output_stream_duration(const RawMediaDecoder* rmd, int stream, int start_frame) {
     AVStream* avstream = get_avstream(rmd, stream);
     int64_t frame_duration = av_rescale_q(1, rmd->time_base, avstream->time_base);
     int64_t duration = avstream->duration;
@@ -278,7 +280,6 @@ int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* i
             info->duration = duration;
         info->video_width = rmd->video.width;
         info->video_height = rmd->video.height;
-        //XXX avpicture_fill may not use this size (may use different stride)
         int size = avpicture_get_size(RAWMEDIA_VIDEO_PIXEL_FORMAT,
                                       info->video_width, info->video_height);
         if (size <= 0)
@@ -305,22 +306,34 @@ int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* i
 }
 
 // Read a packet from the indicated stream.
-// Return 0 on success, <0 on error or AVERROR_EOF
-static int read_packet(RawMediaDecoder* rmd, int stream, AVPacket* pkt) {
+// Return 0 on success, <0 on error.
+static int read_packet(RawMediaDecoder* rmd, int stream_index, AVPacket* pkt) {
     int r = 0;
-    if (stream == rmd->video.stream_index) {
+    if (stream_index == rmd->video.stream_index) {
         if (packet_queue_get(&rmd->video.packetq, pkt))
             return 0;
+        if (rmd->video.status != SS_NORMAL) {
+            if (rmd->video.status == SS_EOF_PENDING)
+                rmd->video.status = SS_EOF;
+            av_init_packet(pkt);
+            return 0;
+        }
     }
-    else if (stream == rmd->audio.stream_index) {
+    else if (stream_index == rmd->audio.stream_index) {
         if (packet_queue_get(&rmd->audio.packetq, pkt))
             return 0;
+        if (rmd->audio.status != SS_NORMAL) {
+            if (rmd->audio.status == SS_EOF_PENDING)
+                rmd->audio.status = SS_EOF;
+            av_init_packet(pkt);
+            return 0;
+        }
     }
 
-    // No queued packats. Read until we get one for our stream,
+    // No queued packets. Read until we get one for our stream,
     // queuing any packets for the other stream.
     while ((r = av_read_frame(rmd->format_ctx, pkt)) >= 0) {
-        if (stream == pkt->stream_index)
+        if (stream_index == pkt->stream_index)
             return 0;
         else if (rmd->video.stream_index == pkt->stream_index) {
             if ((r = packet_queue_put(&rmd->video.packetq, pkt)) < 0)
@@ -330,8 +343,27 @@ static int read_packet(RawMediaDecoder* rmd, int stream, AVPacket* pkt) {
             if ((r = packet_queue_put(&rmd->audio.packetq, pkt)) < 0)
                 return r;
     }
-    //XXX on EOF, should send pkt with null data to decoder if CODEC_CAP_DELAY
-    //XXX need more explicit EOF handling - track in context
+
+    if (r == AVERROR_EOF) {
+        if (stream_index == rmd->video.stream_index) {
+            AVCodec* codec = get_avstream(rmd, rmd->video.stream_index)->codec->codec;
+            if (codec->capabilities & CODEC_CAP_DELAY)
+                rmd->video.status = SS_EOF_PENDING;
+            else
+                rmd->video.status = SS_EOF;
+            av_init_packet(pkt);
+            return 0;
+        }
+        else if (stream_index == rmd->audio.stream_index) {
+            AVCodec* codec = get_avstream(rmd, rmd->audio.stream_index)->codec->codec;
+            if (codec->capabilities & CODEC_CAP_DELAY)
+                rmd->audio.status = SS_EOF_PENDING;
+            else
+                rmd->audio.status = SS_EOF;
+            av_init_packet(pkt);
+            return 0;
+        }
+    }
     return r;
 }
 
@@ -350,6 +382,8 @@ static int decode_video_frame(RawMediaDecoder* rmd) {
         if ((r = avcodec_decode_video2(video_ctx, rmd->video.avframe, &got_picture, &pkt)) < 0)
             return r;
         av_free_packet(&pkt);
+        if (rmd->video.status == SS_EOF)
+            return r;
     }
     return r;
 }
@@ -382,18 +416,23 @@ static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts) {
     while (expected_pts > frame_pts(rmd->video.avframe)) {
         if ((r = decode_video_frame(rmd)) < 0)
             return r;
+        if (rmd->video.status == SS_EOF)
+            return r;
     }
     return r;
 }
 
-//XXX for audio/video, continue returning frames after EOF (silence for audio, last frame for video) - caller knows duration and should stop when they want
-
-// Return <0 on error or AVERROR_EOF
+// Return <0 on error.
+// Returns last frame after EOF.
 int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t* output) {
     int r = 0;
-    int64_t expected_pts = rmd->video.current_frame * rmd->video.frame_duration;
-    if ((r = next_video_frame(rmd, expected_pts)) < 0)
-        return r;
+
+    // If eof, we'll just continue sending the last frame
+    if (rmd->video.status != SS_EOF) {
+        int64_t expected_pts = rmd->video.current_frame * rmd->video.frame_duration;
+        if ((r = next_video_frame(rmd, expected_pts)) < 0)
+            return r;
+    }
 
     if ((r = scale_video(rmd, output)) < 0)
         return r;
@@ -439,6 +478,8 @@ static int decode_audio_frame(RawMediaDecoder* rmd) {
         // If partial exausted and no frame, read a new packet and try again
         if ((r = read_packet(rmd, rmd->audio.stream_index, pkt)) >= 0)
             *pkt_partial = *pkt;
+        if (rmd->audio.status == SS_EOF)
+            return r;
     } while (r >= 0);
     return r;
 }
@@ -452,12 +493,13 @@ static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample) {
     int64_t end_sample = start_sample + samples_per_frame - 1;
     int decoded_nb_samples = 0;
     for (;;) {
-        //XXX handle EOF - pts won't increment after EOF (same for video)
         if (start_sample <= decoded_nb_samples && decoded_nb_samples <= end_sample)
             break;
         if ((r = decode_audio_frame(rmd)) < 0)
             return r;
         decoded_nb_samples += rmd->audio.avframe->nb_samples;
+        if (rmd->audio.status == SS_EOF)
+            return r;
     }
 
     int discard_input_nb_samples = decoded_nb_samples - start_sample;
@@ -511,6 +553,8 @@ static int resample_audio(RawMediaDecoder* rmd, uint8_t **output, int* output_nb
     return r;
 }
 
+// Return <0 on error.
+// Returns silent output after EOF.
 int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output) {
     int r = 0;
     int output_nb_samples = rmd->audio.output_samples_per_frame;
@@ -519,16 +563,25 @@ int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output) {
     if ((r = resample_audio(rmd, &output, &output_nb_samples, NULL, 0)) < 0)
         return r;
 
-    while (output_nb_samples > 0 && (r = decode_audio_frame(rmd)) > 0) {
-        const uint8_t** input = (const uint8_t**)rmd->audio.avframe->data;
-        int input_nb_samples = rmd->audio.avframe->nb_samples;
+    if (rmd->audio.status != SS_EOF) {
+        while (output_nb_samples > 0 && (r = decode_audio_frame(rmd)) > 0) {
+            const uint8_t** input = (const uint8_t**)rmd->audio.avframe->data;
+            int input_nb_samples = rmd->audio.avframe->nb_samples;
 
-        if ((r = resample_audio(rmd, &output, &output_nb_samples,
-                                input, input_nb_samples)) < 0)
-            return r;
+            if ((r = resample_audio(rmd, &output, &output_nb_samples,
+                                    input, input_nb_samples)) < 0)
+                return r;
+        }
     }
 
-    //XXX if output_nb_samples>0 then pad with silence
+    // Pad output with silence
+    if (output_nb_samples > 0) {
+        int bytes = output_nb_samples
+            * av_get_bytes_per_sample(RAWMEDIA_AUDIO_SAMPLE_FMT)
+            * av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
+        memset(output, RAWMEDIA_AUDIO_SILENCE, bytes);
+        return r;
+    }
 
     return r;
 }
