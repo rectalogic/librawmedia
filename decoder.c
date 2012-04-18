@@ -20,7 +20,7 @@ struct RawMediaDecoder {
     int start_frame;
 
     struct RawMediaVideo {
-        int stream;
+        int stream_index;
         PacketQueue packetq;
         AVFrame* avframe;
         uint32_t current_frame;     // Frame number we are decoding
@@ -31,7 +31,7 @@ struct RawMediaDecoder {
     } video;
 
     struct RawMediaAudio {
-        int stream;
+        int stream_index;
         PacketQueue packetq;
         AVFrame* avframe;
         int output_samples_per_frame;
@@ -45,15 +45,15 @@ static inline int64_t frame_pts(AVFrame* avframe);
 static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts);
 static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample);
 
-static inline AVStream* get_avstream(const RawMediaDecoder* rmd, int stream) {
-    return rmd->format_ctx->streams[stream];
+static inline AVStream* get_avstream(const RawMediaDecoder* rmd, int stream_index) {
+    return rmd->format_ctx->streams[stream_index];
 }
 
-static int open_decoder(RawMediaDecoder* rmd, int stream) {
+static int open_decoder(RawMediaDecoder* rmd, int stream_index) {
     int r = 0;
-    if (stream == INVALID_STREAM)
+    if (stream_index == INVALID_STREAM)
         return r;
-    AVCodecContext *ctx = get_avstream(rmd, stream)->codec;
+    AVCodecContext *ctx = get_avstream(rmd, stream_index)->codec;
     AVCodec *codec = avcodec_find_decoder(ctx->codec_id);
     if (codec == NULL)
         return -1;
@@ -67,7 +67,7 @@ static int open_decoder(RawMediaDecoder* rmd, int stream) {
 
 static int create_audio_resample_ctx(RawMediaDecoder* rmd) {
     struct RawMediaAudio* audio = &rmd->audio;
-    AVCodecContext *audio_ctx = get_avstream(rmd, audio->stream)->codec;
+    AVCodecContext *audio_ctx = get_avstream(rmd, audio->stream_index)->codec;
     int64_t channel_layout = (audio_ctx->channel_layout
                               && audio_ctx->channels == av_get_channel_layout_nb_channels(audio_ctx->channel_layout))
         ? audio_ctx->channel_layout
@@ -98,7 +98,7 @@ static int initial_seek(RawMediaDecoder* rmd, const char* filename) {
 
     int64_t video_pts = -1;
     // Skip frames in video seeking forward
-    if (rmd->video.stream != INVALID_STREAM) {
+    if (rmd->video.stream_index != INVALID_STREAM) {
         video_pts = rmd->video.current_frame * rmd->video.frame_duration;
         if ((r = next_video_frame(rmd, video_pts)) < 0) {
             av_log(NULL, AV_LOG_FATAL, "%s: failed to seek video\n", filename);
@@ -109,9 +109,9 @@ static int initial_seek(RawMediaDecoder* rmd, const char* filename) {
     }
 
     // Skip frames in audio seeking forward
-    if (rmd->audio.stream != INVALID_STREAM) {
-        AVRational audio_time_base = get_avstream(rmd, rmd->audio.stream)->time_base;
-        AVRational video_time_base = get_avstream(rmd, rmd->video.stream)->time_base;
+    if (rmd->audio.stream_index != INVALID_STREAM) {
+        AVRational audio_time_base = get_avstream(rmd, rmd->audio.stream_index)->time_base;
+        AVRational video_time_base = get_avstream(rmd, rmd->video.stream_index)->time_base;
         int64_t first_audio_sample = 0;
         if (video_pts != -1) {
             first_audio_sample = av_rescale_q(video_pts, video_time_base,
@@ -136,8 +136,8 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
     if (!rmd)
         return NULL;
 
-    rmd->video.stream = INVALID_STREAM;
-    rmd->audio.stream = INVALID_STREAM;
+    rmd->video.stream_index = INVALID_STREAM;
+    rmd->audio.stream_index = INVALID_STREAM;
     rmd->start_frame = config->start_frame;
 
     rmd->time_base = (AVRational){config->framerate.den, config->framerate.num};
@@ -155,13 +155,13 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
         goto error;
     }
 
-    for (int j = 0; j < format_ctx->nb_streams; j++) {
-        AVStream* stream = format_ctx->streams[j];
+    for (int stream_index = 0; stream_index < format_ctx->nb_streams; stream_index++) {
+        AVStream* stream = format_ctx->streams[stream_index];
         switch (stream->codec->codec_type) {
         case AVMEDIA_TYPE_VIDEO:
-            if (!config->discard_video && rmd->video.stream == INVALID_STREAM) {
-                rmd->video.stream = j;
-                if ((r = open_decoder(rmd, rmd->video.stream)) < 0) {
+            if (!config->discard_video && rmd->video.stream_index == INVALID_STREAM) {
+                rmd->video.stream_index = stream_index;
+                if ((r = open_decoder(rmd, rmd->video.stream_index)) < 0) {
                     av_log(NULL, AV_LOG_FATAL,
                            "%s: failed to open video decoder\n", filename);
                     goto error;
@@ -186,9 +186,9 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
             break;
 
         case AVMEDIA_TYPE_AUDIO:
-            if (!config->discard_audio && rmd->audio.stream == INVALID_STREAM){
-                rmd->audio.stream = j;
-                if ((r = open_decoder(rmd, rmd->audio.stream)) < 0) {
+            if (!config->discard_audio && rmd->audio.stream_index == INVALID_STREAM){
+                rmd->audio.stream_index = stream_index;
+                if ((r = open_decoder(rmd, rmd->audio.stream_index)) < 0) {
                     av_log(NULL, AV_LOG_FATAL,
                            "%s: failed to open audio decoder\n", filename);
                     goto error;
@@ -213,7 +213,8 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
             break;
         }
     }
-    if (rmd->video.stream == INVALID_STREAM && rmd->audio.stream == INVALID_STREAM) {
+    if (rmd->video.stream_index == INVALID_STREAM
+        && rmd->audio.stream_index == INVALID_STREAM) {
         av_log(NULL, AV_LOG_FATAL, "%s: could not find audio or video stream\n", filename);
         goto error;
     }
@@ -232,14 +233,14 @@ error:
 void rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
     if (rmd) {
         if (rmd->format_ctx) {
-            if (rmd->video.stream != INVALID_STREAM) {
-                avcodec_close(get_avstream(rmd, rmd->video.stream)->codec);
+            if (rmd->video.stream_index != INVALID_STREAM) {
+                avcodec_close(get_avstream(rmd, rmd->video.stream_index)->codec);
                 packet_queue_flush(&rmd->video.packetq);
                 av_free(rmd->video.avframe);
                 sws_freeContext(rmd->video.sws_ctx);
             }
-            if (rmd->audio.stream != INVALID_STREAM) {
-                avcodec_close(get_avstream(rmd, rmd->audio.stream)->codec);
+            if (rmd->audio.stream_index != INVALID_STREAM) {
+                avcodec_close(get_avstream(rmd, rmd->audio.stream_index)->codec);
                 packet_queue_flush(&rmd->audio.packetq);
                 av_free(rmd->audio.avframe);
                 // Don't free audio.pkt_partial, it's a copy of audio.pkt
@@ -269,9 +270,9 @@ static int64_t output_stream_duration(const RawMediaDecoder* rmd, int stream, ui
 int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* info) {
     *info = (RawMediaDecoderInfo){0};
 
-    if (rmd->video.stream != INVALID_STREAM) {
+    if (rmd->video.stream_index != INVALID_STREAM) {
         info->has_video = 1;
-        int64_t duration = output_stream_duration(rmd, rmd->video.stream,
+        int64_t duration = output_stream_duration(rmd, rmd->video.stream_index,
                                                   rmd->start_frame);
         if (info->duration < duration)
             info->duration = duration;
@@ -285,9 +286,9 @@ int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* i
         info->video_framebuffer_size = size;
     }
 
-    if (rmd->audio.stream != INVALID_STREAM) {
+    if (rmd->audio.stream_index != INVALID_STREAM) {
         info->has_audio = 1;
-        int64_t duration = output_stream_duration(rmd, rmd->audio.stream,
+        int64_t duration = output_stream_duration(rmd, rmd->audio.stream_index,
                                                   rmd->start_frame);
         if (info->duration < duration)
             info->duration = duration;
@@ -307,11 +308,11 @@ int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* i
 // Return 0 on success, <0 on error or AVERROR_EOF
 static int read_packet(RawMediaDecoder* rmd, int stream, AVPacket* pkt) {
     int r = 0;
-    if (stream == rmd->video.stream) {
+    if (stream == rmd->video.stream_index) {
         if (packet_queue_get(&rmd->video.packetq, pkt))
             return 0;
     }
-    else if (stream == rmd->audio.stream) {
+    else if (stream == rmd->audio.stream_index) {
         if (packet_queue_get(&rmd->audio.packetq, pkt))
             return 0;
     }
@@ -321,11 +322,11 @@ static int read_packet(RawMediaDecoder* rmd, int stream, AVPacket* pkt) {
     while ((r = av_read_frame(rmd->format_ctx, pkt)) >= 0) {
         if (stream == pkt->stream_index)
             return 0;
-        else if (rmd->video.stream == pkt->stream_index) {
+        else if (rmd->video.stream_index == pkt->stream_index) {
             if ((r = packet_queue_put(&rmd->video.packetq, pkt)) < 0)
                 return r;
         }
-        else if (rmd->audio.stream == pkt->stream_index)
+        else if (rmd->audio.stream_index == pkt->stream_index)
             if ((r = packet_queue_put(&rmd->audio.packetq, pkt)) < 0)
                 return r;
     }
@@ -341,10 +342,10 @@ static inline int64_t frame_pts(AVFrame* avframe) {
 
 static int decode_video_frame(RawMediaDecoder* rmd) {
     int r = 0;
-    AVCodecContext *video_ctx = get_avstream(rmd, rmd->video.stream)->codec;
+    AVCodecContext *video_ctx = get_avstream(rmd, rmd->video.stream_index)->codec;
     AVPacket pkt;
     int got_picture = 0;
-    while (!got_picture && (r = read_packet(rmd, rmd->video.stream, &pkt)) >= 0) {
+    while (!got_picture && (r = read_packet(rmd, rmd->video.stream_index, &pkt)) >= 0) {
         avcodec_get_frame_defaults(rmd->video.avframe);
         if ((r = avcodec_decode_video2(video_ctx, rmd->video.avframe, &got_picture, &pkt)) < 0)
             return r;
@@ -405,7 +406,7 @@ int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t* output) {
 // Return <0 on error, 0 if no frame decoded, >0 if frame decoded
 static int decode_partial_audio_frame(RawMediaDecoder* rmd) {
     int r = 0;
-    AVCodecContext *audio_ctx = get_avstream(rmd, rmd->audio.stream)->codec;
+    AVCodecContext *audio_ctx = get_avstream(rmd, rmd->audio.stream_index)->codec;
     AVPacket* pkt = &rmd->audio.pkt;
     AVPacket* pkt_partial = &rmd->audio.pkt_partial;
     int got_frame = 0;
@@ -436,7 +437,7 @@ static int decode_audio_frame(RawMediaDecoder* rmd) {
         if ((r = decode_partial_audio_frame(rmd)))
             return r;
         // If partial exausted and no frame, read a new packet and try again
-        if ((r = read_packet(rmd, rmd->audio.stream, pkt)) >= 0)
+        if ((r = read_packet(rmd, rmd->audio.stream_index, pkt)) >= 0)
             *pkt_partial = *pkt;
     } while (r >= 0);
     return r;
@@ -446,7 +447,7 @@ static int decode_audio_frame(RawMediaDecoder* rmd) {
 // start_sample and samples_per_frame are both in source audio timebase
 static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample) {
     int r = 0;
-    AVRational audio_time_base = get_avstream(rmd, rmd->audio.stream)->time_base;
+    AVRational audio_time_base = get_avstream(rmd, rmd->audio.stream_index)->time_base;
     int64_t samples_per_frame = av_rescale_q(1, rmd->time_base, audio_time_base);
     int64_t end_sample = start_sample + samples_per_frame - 1;
     int decoded_nb_samples = 0;
@@ -526,5 +527,8 @@ int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output) {
                                 input, input_nb_samples)) < 0)
             return r;
     }
+
+    //XXX if output_nb_samples>0 then pad with silence
+
     return r;
 }
