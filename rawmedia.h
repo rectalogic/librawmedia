@@ -55,4 +55,10 @@ int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t* output);
 int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output);
 void rawmedia_destroy_decoder(RawMediaDecoder* rmd);
 
+RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEncoderConfig* config);
+const RawMediaEncoderInfo* rawmedia_get_encoder_info(const RawMediaEncoder* rme);
+int rawmedia_encode_video(RawMediaEncoder* rme, uint8_t* input);
+int rawmedia_encode_audio(RawMediaEncoder* rme, uint8_t* input);
+void rawmedia_destroy_encoder(RawMediaEncoder* rme);
+
 #endif

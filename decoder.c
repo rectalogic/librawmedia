@@ -1,5 +1,4 @@
-//XXX also need lossless encoder class - see libavformat/output-example.c
-
+#include <libavformat/avformat.h>
 #include <libavutil/opt.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
