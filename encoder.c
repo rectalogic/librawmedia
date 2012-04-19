@@ -10,10 +10,10 @@ struct RawMediaEncoder {
 
     struct RawMediaVideo {
         AVStream* avstream;
-        //XXX needs AVFrame, can we alloc avframe then avpicture_alloc into that? apparently encoe_video2 will leak then http://ffmpeg.org/pipermail/ffmpeg-devel/2010-May/095305.html
         AVFrame* avframe;
         int width;
         int height;
+        int pts_per_frame;
         struct SwsContext* sws_ctx;
     } video;
 
@@ -59,7 +59,6 @@ static AVStream* add_audio_stream(AVFormatContext* format_ctx, const RawMediaEnc
     avstream = avformat_new_stream(format_ctx, codec);
     if (!avstream)
         return NULL;
-    //XXX do we need to set stream->id = 1?
     AVCodecContext* codec_ctx = avstream->codec;
     codec_ctx->sample_fmt = RAWMEDIA_AUDIO_SAMPLE_FMT;
     codec_ctx->sample_rate = RAWMEDIA_AUDIO_SAMPLE_RATE;
@@ -124,13 +123,14 @@ RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEnc
         }
         rme->video.width = config->width;
         rme->video.height = config->height;
-
+        rme->video.pts_per_frame = config->framerate_den;
         if (!(rme->video.avframe = avcodec_alloc_frame()))
             goto error;
         if (avpicture_alloc((AVPicture*)rme->video.avframe,
                             RAWMEDIA_VIDEO_ENCODE_PIXEL_FORMAT,
                             rme->video.width, rme->video.height) < 0)
             goto error;
+        rme->video.avframe->pts = 0;
     }
 
     if (config->has_audio) {
@@ -146,6 +146,7 @@ RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEnc
             av_rescale_q(1, time_base, RAWMEDIA_AUDIO_TIME_BASE);
         if (!(rme->audio.avframe = avcodec_alloc_frame()))
             goto error;
+        rme->audio.avframe->pts = 0;
     }
 
     if (!(format_ctx->flags & AVFMT_NOFILE)) {
@@ -155,7 +156,7 @@ RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEnc
             goto error;
         }
     }
-    //XXX pass options with yuvs tag?
+
     if (avformat_write_header(format_ctx, NULL) < 0) {
         av_log(NULL, AV_LOG_FATAL, "%s: failed to write header.\n",
                filename);
@@ -185,7 +186,6 @@ void rawmedia_destroy_encoder(RawMediaEncoder* rme) {
                 avpicture_free((AVPicture*)rme->video.avframe);
                 av_free(rme->video.avframe);
                 sws_freeContext(rme->video.sws_ctx);
-                //XXX av_free picture/tmp_picture/video_outbuf? (see muxing.c)
             }
             if (rme->audio.avstream) {
                 avcodec_close(rme->audio.avstream->codec);
@@ -231,21 +231,23 @@ static int convert_video(RawMediaEncoder* rme, uint8_t* input) {
 int rawmedia_encode_video(RawMediaEncoder* rme, uint8_t* input) {
     int r = 0;
     struct RawMediaVideo* video = &rme->video;
+    AVCodecContext* codec_ctx = video->avstream->codec;
     AVPacket pkt = {0};
-    av_init_packet(&pkt);
+
     if ((r = convert_video(rme, input)) < 0)
         return r;
 
     int got_packet = 0;
-    if ((r = avcodec_encode_video2(video->avstream->codec, &pkt,
-                                   video->avframe, &got_packet)) < 0)
+    if ((r = avcodec_encode_video2(codec_ctx, &pkt, video->avframe, &got_packet)) < 0)
         return r;
     if (!got_packet)
         return 0;
     pkt.stream_index = video->avstream->index;
     if ((r = av_interleaved_write_frame(rme->format_ctx, &pkt)) < 0)
         return r;
-    //XXX?? av_free_packet(&pkt);
+
+    video->avframe->pts += video->pts_per_frame;
+
     return r;
 }
 
@@ -253,13 +255,14 @@ int rawmedia_encode_audio(RawMediaEncoder* rme, uint8_t* input) {
     int r = 0;
     struct RawMediaAudio* audio = &rme->audio;
     AVPacket pkt = {0};
-    av_init_packet(&pkt);
+
     audio->avframe->nb_samples = audio->input_samples_per_frame;
     int nb_channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
     if ((r = avcodec_fill_audio_frame(audio->avframe, nb_channels,
                                       RAWMEDIA_AUDIO_SAMPLE_FMT, input,
                                       rme->info.audio_framebuffer_size, 1)))
         return r;
+
     int got_packet = 0;
     if ((r = avcodec_encode_audio2(audio->avstream->codec, &pkt,
                                    audio->avframe, &got_packet)) < 0)
@@ -269,7 +272,9 @@ int rawmedia_encode_audio(RawMediaEncoder* rme, uint8_t* input) {
     pkt.stream_index = audio->avstream->index;
     if ((r = av_interleaved_write_frame(rme->format_ctx, &pkt)) < 0)
         return r;
-    //XXX?? av_free_packet(&pkt);
+
+    audio->avframe->pts += audio->input_samples_per_frame;
+
     return r;
 }
 
