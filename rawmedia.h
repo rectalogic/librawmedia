@@ -49,8 +49,7 @@ typedef struct RawMediaEncoderInfo {
 } RawMediaEncoderInfo;
 
 RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDecoderConfig* config);
-// Must be called before beginning to decode
-int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* info);
+const RawMediaDecoderInfo* rawmedia_get_decoder_info(const RawMediaDecoder* rmd);
 // output must be the size indicated in RawMediaDecoderInfo
 int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t* output);
 int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output);

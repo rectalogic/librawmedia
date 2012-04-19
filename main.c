@@ -30,14 +30,10 @@ int main(int argc, const char *argv[]) {
         return -1;
     }
 
-    RawMediaDecoderInfo info;
-    if (rawmedia_get_decoder_info(rmd, &info) < 0) {
-        fprintf(stderr, "Failed to get decoder info.\n");
-        return -1;
-    }
+    const RawMediaDecoderInfo* info = rawmedia_get_decoder_info(rmd);
 
-    uint8_t video_buffer[info.video_framebuffer_size];
-    uint8_t audio_buffer[info.audio_framebuffer_size];
+    uint8_t video_buffer[info->video_framebuffer_size];
+    uint8_t audio_buffer[info->audio_framebuffer_size];
     for (int frame = 0; frame < OUTPUT_FRAMES; frame++) {
         if (rawmedia_decode_video(rmd, video_buffer) < 0) {
             fprintf(stderr, "Failed to decode video.\n");

@@ -16,7 +16,6 @@ enum StreamStatus {
 struct RawMediaDecoder {
     AVFormatContext* format_ctx;
     AVRational time_base;
-    int start_frame;
 
     struct RawMediaVideo {
         int stream_index;
@@ -40,6 +39,8 @@ struct RawMediaDecoder {
         struct SwrContext* swr_ctx;
         enum StreamStatus status;
     } audio;
+
+    RawMediaDecoderInfo info;
 };
 
 static inline int64_t frame_pts(AVFrame* avframe);
@@ -88,12 +89,12 @@ static int create_audio_resample_ctx(RawMediaDecoder* rmd) {
     return 0;
 }
 
-static int initial_seek(RawMediaDecoder* rmd, const char* filename) {
+static int initial_seek(RawMediaDecoder* rmd, int start_frame, const char* filename) {
     int r = 0;
-    if (rmd->start_frame == 0)
+    if (start_frame <= 0)
         return 0;
 
-    int64_t timestamp = av_rescale_q(rmd->start_frame, rmd->time_base, AV_TIME_BASE_Q);
+    int64_t timestamp = av_rescale_q(start_frame, rmd->time_base, AV_TIME_BASE_Q);
     if (av_seek_frame(rmd->format_ctx, -1, timestamp, AVSEEK_FLAG_BACKWARD) < 0)
         av_log(NULL, AV_LOG_WARNING, "%s: failed to seek\n", filename);
 
@@ -119,7 +120,7 @@ static int initial_seek(RawMediaDecoder* rmd, const char* filename) {
                                               audio_time_base);
         }
         else {
-            first_audio_sample = av_rescale_q(rmd->start_frame, rmd->time_base,
+            first_audio_sample = av_rescale_q(start_frame, rmd->time_base,
                                               audio_time_base);
         }
         if ((r = first_audio_frame(rmd, first_audio_sample)) < 0) {
@@ -128,6 +129,55 @@ static int initial_seek(RawMediaDecoder* rmd, const char* filename) {
         }
     }
     return r;
+}
+
+// Stream duration in output frames
+static int64_t output_stream_duration(const RawMediaDecoder* rmd, int stream, int start_frame) {
+    AVStream* avstream = get_avstream(rmd, stream);
+    int64_t frame_duration = av_rescale_q(1, rmd->time_base, avstream->time_base);
+    int64_t duration = avstream->duration;
+    int64_t frames = duration / frame_duration;
+    // Round up if partial frame
+    if (duration % frame_duration)
+        frames++;
+    frames -= start_frame;
+    return frames;
+}
+
+static int init_decoder_info(RawMediaDecoder* rmd, const RawMediaDecoderConfig* config) {
+    RawMediaDecoderInfo* info = &rmd->info;
+
+    if (rmd->video.stream_index != INVALID_STREAM) {
+        info->has_video = 1;
+        int64_t duration = output_stream_duration(rmd, rmd->video.stream_index,
+                                                  config->start_frame);
+        if (info->duration < duration)
+            info->duration = duration;
+        info->width = rmd->video.width;
+        info->height = rmd->video.height;
+        int size = avpicture_get_size(RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
+                                      info->width, info->height);
+        if (size <= 0)
+            return -1;
+        info->video_framebuffer_size = size;
+    }
+
+    if (rmd->audio.stream_index != INVALID_STREAM) {
+        info->has_audio = 1;
+        int64_t duration = output_stream_duration(rmd, rmd->audio.stream_index,
+                                                  config->start_frame);
+        if (info->duration < duration)
+            info->duration = duration;
+
+        int nb_channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
+        int size = av_samples_get_buffer_size(NULL, nb_channels,
+                                              rmd->audio.output_samples_per_frame,
+                                              RAWMEDIA_AUDIO_SAMPLE_FMT, 1);
+        if (size <= 0)
+            return -1;
+        info->audio_framebuffer_size = size;
+    }
+    return 0;
 }
 
 RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDecoderConfig* config) {
@@ -139,7 +189,6 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
 
     rmd->video.stream_index = INVALID_STREAM;
     rmd->audio.stream_index = INVALID_STREAM;
-    rmd->start_frame = config->start_frame;
 
     rmd->time_base = (AVRational){config->framerate_den, config->framerate_num};
 
@@ -220,7 +269,10 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
         goto error;
     }
 
-    if ((r = initial_seek(rmd, filename)) < 0)
+    if ((r = initial_seek(rmd, config->start_frame, filename)) < 0)
+        goto error;
+
+    if ((r = init_decoder_info(rmd, config)) < 0)
         goto error;
 
     return rmd;
@@ -254,53 +306,8 @@ void rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
     }
 }
 
-// Stream duration in output frames
-static int64_t output_stream_duration(const RawMediaDecoder* rmd, int stream, int start_frame) {
-    AVStream* avstream = get_avstream(rmd, stream);
-    int64_t frame_duration = av_rescale_q(1, rmd->time_base, avstream->time_base);
-    int64_t duration = avstream->duration;
-    int64_t frames = duration / frame_duration;
-    // Round up if partial frame
-    if (duration % frame_duration)
-        frames++;
-    frames -= start_frame;
-    return frames;
-}
-
-int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* info) {
-    *info = (RawMediaDecoderInfo){0};
-
-    if (rmd->video.stream_index != INVALID_STREAM) {
-        info->has_video = 1;
-        int64_t duration = output_stream_duration(rmd, rmd->video.stream_index,
-                                                  rmd->start_frame);
-        if (info->duration < duration)
-            info->duration = duration;
-        info->width = rmd->video.width;
-        info->height = rmd->video.height;
-        int size = avpicture_get_size(RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
-                                      info->width, info->height);
-        if (size <= 0)
-            return -1;
-        info->video_framebuffer_size = size;
-    }
-
-    if (rmd->audio.stream_index != INVALID_STREAM) {
-        info->has_audio = 1;
-        int64_t duration = output_stream_duration(rmd, rmd->audio.stream_index,
-                                                  rmd->start_frame);
-        if (info->duration < duration)
-            info->duration = duration;
-
-        int nb_channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
-        int size = av_samples_get_buffer_size(NULL, nb_channels,
-                                              rmd->audio.output_samples_per_frame,
-                                              RAWMEDIA_AUDIO_SAMPLE_FMT, 1);
-        if (size <= 0)
-            return -1;
-        info->audio_framebuffer_size = size;
-    }
-    return 0;
+const RawMediaDecoderInfo* rawmedia_get_decoder_info(const RawMediaDecoder* rmd) {
+    return &rmd->info;
 }
 
 // Read a packet from the indicated stream.
