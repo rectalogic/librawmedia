@@ -13,14 +13,12 @@ struct RawMediaEncoder {
         AVFrame* avframe;
         int width;
         int height;
-        int pts_per_frame;
         struct SwsContext* sws_ctx;
     } video;
 
     struct RawMediaAudio {
         AVStream* avstream;
         AVFrame* avframe;
-        int input_samples_per_frame;
     } audio;
 
     RawMediaEncoderInfo info;
@@ -86,7 +84,7 @@ static int init_encoder_info(RawMediaEncoder* rme, const RawMediaEncoderConfig* 
     if (rme->audio.avstream) {
         int nb_channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
         int size = av_samples_get_buffer_size(NULL, nb_channels,
-                                              rme->audio.input_samples_per_frame,
+                                              rme->audio.avframe->nb_samples,
                                               RAWMEDIA_AUDIO_SAMPLE_FMT, 1);
         if (size <= 0)
             return -1;
@@ -123,7 +121,6 @@ RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEnc
         }
         rme->video.width = config->width;
         rme->video.height = config->height;
-        rme->video.pts_per_frame = config->framerate_den;
         if (!(rme->video.avframe = avcodec_alloc_frame()))
             goto error;
         if (avpicture_alloc((AVPicture*)rme->video.avframe,
@@ -140,13 +137,13 @@ RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEnc
                    filename);
             goto error;
         }
-        AVRational time_base = (AVRational){config->framerate_den,
-                                            config->framerate_num};
-        rme->audio.input_samples_per_frame =
-            av_rescale_q(1, time_base, RAWMEDIA_AUDIO_TIME_BASE);
         if (!(rme->audio.avframe = avcodec_alloc_frame()))
             goto error;
         rme->audio.avframe->pts = 0;
+        AVRational time_base = (AVRational){config->framerate_den,
+                                            config->framerate_num};
+        rme->audio.avframe->nb_samples =
+            av_rescale_q(1, time_base, RAWMEDIA_AUDIO_TIME_BASE);
     }
 
     if (!(format_ctx->flags & AVFMT_NOFILE)) {
@@ -174,7 +171,6 @@ error:
 }
 
 void rawmedia_destroy_encoder(RawMediaEncoder* rme) {
-    //XXX need to send NULL frame to flush for DELAY encoders
     if (rme) {
         AVFormatContext* format_ctx = rme->format_ctx;
         if (format_ctx) {
@@ -246,7 +242,7 @@ int rawmedia_encode_video(RawMediaEncoder* rme, uint8_t* input) {
     if ((r = av_interleaved_write_frame(rme->format_ctx, &pkt)) < 0)
         return r;
 
-    video->avframe->pts += video->pts_per_frame;
+    video->avframe->pts += video->avstream->codec->time_base.num;
 
     return r;
 }
@@ -256,7 +252,6 @@ int rawmedia_encode_audio(RawMediaEncoder* rme, uint8_t* input) {
     struct RawMediaAudio* audio = &rme->audio;
     AVPacket pkt = {0};
 
-    audio->avframe->nb_samples = audio->input_samples_per_frame;
     int nb_channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
     if ((r = avcodec_fill_audio_frame(audio->avframe, nb_channels,
                                       RAWMEDIA_AUDIO_SAMPLE_FMT, input,
@@ -273,7 +268,7 @@ int rawmedia_encode_audio(RawMediaEncoder* rme, uint8_t* input) {
     if ((r = av_interleaved_write_frame(rme->format_ctx, &pkt)) < 0)
         return r;
 
-    audio->avframe->pts += audio->input_samples_per_frame;
+    audio->avframe->pts += audio->avframe->nb_samples;
 
     return r;
 }

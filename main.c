@@ -4,7 +4,6 @@
 #define FRAME_RATE_NUM 30
 #define FRAME_RATE_DEN 1
 #define START_FRAME 15
-#define OUTPUT_FRAMES 300
 
 int main(int argc, const char *argv[]) {
     if (argc != 5) {
@@ -46,7 +45,7 @@ int main(int argc, const char *argv[]) {
 
     uint8_t video_buffer[info->video_framebuffer_size];
     uint8_t audio_buffer[info->audio_framebuffer_size];
-    for (int frame = 0; frame < OUTPUT_FRAMES; frame++) {
+    for (int frame = 0; frame < info->duration; frame++) {
         if (rawmedia_decode_video(rmd, video_buffer) < 0) {
             fprintf(stderr, "Failed to decode video.\n");
             return -1;
