@@ -7,21 +7,23 @@
 #define OUTPUT_FRAMES 300
 
 int main(int argc, const char *argv[]) {
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s <input-file> <audio-out-file> <video-out-file>\n", argv[0]);
+    if (argc != 5) {
+        fprintf(stderr, "Usage: %s <input-file> <output-file.mov> <audio-raw-file> <video-raw-file>\n", argv[0]);
         return -1;
     }
     const char* filename = argv[1];
-    const char* audio_filename = argv[2];
-    const char* video_filename = argv[3];
+    const char* output_filename = argv[2];
+    const char* audio_filename = argv[3];
+    const char* video_filename = argv[4];
 
     rawmedia_init();
-    RawMediaDecoderConfig config = { .framerate_num = FRAME_RATE_NUM,
-                                     .framerate_den = FRAME_RATE_DEN,
-                                     .start_frame = START_FRAME };
-    RawMediaDecoder* rmd = rawmedia_create_decoder(filename, &config);
+    RawMediaDecoderConfig dconfig = { .framerate_num = FRAME_RATE_NUM,
+                                      .framerate_den = FRAME_RATE_DEN,
+                                      .start_frame = START_FRAME };
+    RawMediaDecoder* rmd = rawmedia_create_decoder(filename, &dconfig);
     if (!rmd)
         return -1;
+
 
     FILE* audio_fp = fopen(audio_filename, "w");
     FILE* video_fp = fopen(video_filename, "w");
@@ -32,6 +34,16 @@ int main(int argc, const char *argv[]) {
 
     const RawMediaDecoderInfo* info = rawmedia_get_decoder_info(rmd);
 
+    RawMediaEncoderConfig econfig = { .framerate_num = FRAME_RATE_NUM,
+                                      .framerate_den = FRAME_RATE_DEN,
+                                      .width = info->width,
+                                      .height = info->height,
+                                      .has_video = info->has_video,
+                                      .has_audio = info->has_audio };
+    RawMediaEncoder* rme = rawmedia_create_encoder(output_filename, &econfig);
+    if (!rme)
+        return -1;
+
     uint8_t video_buffer[info->video_framebuffer_size];
     uint8_t audio_buffer[info->audio_framebuffer_size];
     for (int frame = 0; frame < OUTPUT_FRAMES; frame++) {
@@ -41,6 +53,14 @@ int main(int argc, const char *argv[]) {
         }
         if (rawmedia_decode_audio(rmd, audio_buffer) < 0) {
             fprintf(stderr, "Failed to decode audio.\n");
+            return -1;
+        }
+        if (rawmedia_encode_video(rme, video_buffer) < 0) {
+            fprintf(stderr, "Failed to encode video.\n");
+            return -1;
+        }
+        if (rawmedia_encode_audio(rme, audio_buffer) < 0) {
+            fprintf(stderr, "Failed to encode audio.\n");
             return -1;
         }
         if (fwrite(video_buffer, sizeof(video_buffer), 1, video_fp) < 1) {
@@ -54,6 +74,8 @@ int main(int argc, const char *argv[]) {
     }
 
     rawmedia_destroy_decoder(rmd);
+    rawmedia_destroy_encoder(rme);
+
     fclose(video_fp);
     fclose(audio_fp);
     return 0;
