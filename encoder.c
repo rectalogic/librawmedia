@@ -10,7 +10,8 @@ struct RawMediaEncoder {
 
     struct RawMediaVideo {
         AVStream* avstream;
-        AVPicture avpicture;
+        //XXX needs AVFrame, can we alloc avframe then avpicture_alloc into that? apparently encoe_video2 will leak then http://ffmpeg.org/pipermail/ffmpeg-devel/2010-May/095305.html
+        AVFrame* avframe;
         int width;
         int height;
         struct SwsContext* sws_ctx;
@@ -124,7 +125,9 @@ RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEnc
         rme->video.width = config->width;
         rme->video.height = config->height;
 
-        if (avpicture_alloc(&rme->video.avpicture,
+        if (!(rme->video.avframe = avcodec_alloc_frame()))
+            goto error;
+        if (avpicture_alloc((AVPicture*)rme->video.avframe,
                             RAWMEDIA_VIDEO_ENCODE_PIXEL_FORMAT,
                             rme->video.width, rme->video.height) < 0)
             goto error;
@@ -170,6 +173,7 @@ error:
 }
 
 void rawmedia_destroy_encoder(RawMediaEncoder* rme) {
+    //XXX need to send NULL frame to flush for DELAY encoders
     if (rme) {
         AVFormatContext* format_ctx = rme->format_ctx;
         if (format_ctx) {
@@ -178,7 +182,8 @@ void rawmedia_destroy_encoder(RawMediaEncoder* rme) {
             // Close codecs
             if (rme->video.avstream) {
                 avcodec_close(rme->video.avstream->codec);
-                avpicture_free(&rme->video.avpicture);
+                avpicture_free((AVPicture*)rme->video.avframe);
+                av_free(rme->video.avframe);
                 sws_freeContext(rme->video.sws_ctx);
                 //XXX av_free picture/tmp_picture/video_outbuf? (see muxing.c)
             }
@@ -219,7 +224,7 @@ static int convert_video(RawMediaEncoder* rme, uint8_t* input) {
     sws_scale(video->sws_ctx,
               (const uint8_t* const*)input_picture.data, input_picture.linesize,
               0, video->height,
-              video->avpicture.data, video->avpicture.linesize);
+              video->avframe->data, video->avframe->linesize);
     return 0;
 }
 
@@ -231,17 +236,16 @@ int rawmedia_encode_video(RawMediaEncoder* rme, uint8_t* input) {
     if ((r = convert_video(rme, input)) < 0)
         return r;
 
-    // Make sure we're raw - XXX check this at init time
-    if (!(rme->format_ctx->oformat->flags & AVFMT_RAWPICTURE))
-        return -1;
-
-    pkt.flags |= AV_PKT_FLAG_KEY;
+    int got_packet = 0;
+    if ((r = avcodec_encode_video2(video->avstream->codec, &pkt,
+                                   video->avframe, &got_packet)) < 0)
+        return r;
+    if (!got_packet)
+        return 0;
     pkt.stream_index = video->avstream->index;
-    pkt.data = (uint8_t*)&video->avpicture;
-    pkt.size = sizeof(AVPicture);
     if ((r = av_interleaved_write_frame(rme->format_ctx, &pkt)) < 0)
         return r;
-
+    //XXX?? av_free_packet(&pkt);
     return r;
 }
 
@@ -265,6 +269,7 @@ int rawmedia_encode_audio(RawMediaEncoder* rme, uint8_t* input) {
     pkt.stream_index = audio->avstream->index;
     if ((r = av_interleaved_write_frame(rme->format_ctx, &pkt)) < 0)
         return r;
+    //XXX?? av_free_packet(&pkt);
     return r;
 }
 
