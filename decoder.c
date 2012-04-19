@@ -7,8 +7,6 @@
 #include "rawmedia_internal.h"
 #include "packet_queue.h"
 
-#define INVALID_STREAM -1
-
 enum StreamStatus {
     SS_EOF_PENDING = -1,
     SS_NORMAL = 0,
@@ -278,10 +276,10 @@ int rawmedia_get_decoder_info(const RawMediaDecoder* rmd, RawMediaDecoderInfo* i
                                                   rmd->start_frame);
         if (info->duration < duration)
             info->duration = duration;
-        info->video_width = rmd->video.width;
-        info->video_height = rmd->video.height;
-        int size = avpicture_get_size(RAWMEDIA_VIDEO_PIXEL_FORMAT,
-                                      info->video_width, info->video_height);
+        info->width = rmd->video.width;
+        info->height = rmd->video.height;
+        int size = avpicture_get_size(RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
+                                      info->width, info->height);
         if (size <= 0)
             return -1;
         info->video_framebuffer_size = size;
@@ -396,13 +394,13 @@ static int scale_video(RawMediaDecoder* rmd, uint8_t* output) {
                              frame->width, frame->height,
                              frame->format,
                              video->width, video->height,
-                             RAWMEDIA_VIDEO_PIXEL_FORMAT,
+                             RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
                              SWS_LANCZOS|SWS_ACCURATE_RND|SWS_FULL_CHR_H_INT,
                              NULL, NULL, NULL);
     if (!video->sws_ctx)
         return -1;
     AVPicture picture;
-    avpicture_fill(&picture, output, RAWMEDIA_VIDEO_PIXEL_FORMAT,
+    avpicture_fill(&picture, output, RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
                    video->width, video->height);
     sws_scale(video->sws_ctx,
               (const uint8_t* const*)frame->data, frame->linesize,

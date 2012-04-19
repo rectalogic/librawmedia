@@ -24,12 +24,29 @@ typedef struct RawMediaDecoderInfo {
 
     int has_video;
     int video_framebuffer_size;    // Frame buffer size in bytes
-    int video_width;
-    int video_height;
+    int width;
+    int height;
 
     int has_audio;
     int audio_framebuffer_size;    // Frame buffer size in bytes
 } RawMediaDecoderInfo;
+
+typedef struct RawMediaEncoder RawMediaEncoder;
+
+typedef struct RawMediaEncoderConfig {
+    int framerate_num;
+    int framerate_den;
+    int width;
+    int height;
+
+    int has_video;
+    int has_audio;
+} RawMediaEncoderConfig;
+
+typedef struct RawMediaEncoderInfo {
+    int video_framebuffer_size;    // Frame buffer size in bytes
+    int audio_framebuffer_size;    // Frame buffer size in bytes
+} RawMediaEncoderInfo;
 
 RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDecoderConfig* config);
 // Must be called before beginning to decode
