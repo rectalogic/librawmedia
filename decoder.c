@@ -319,8 +319,7 @@ static int read_packet(RawMediaDecoder* rmd, int stream_index, AVPacket* pkt) {
         if (rmd->video.status != SS_NORMAL) {
             if (rmd->video.status == SS_EOF_PENDING)
                 rmd->video.status = SS_EOF;
-            av_init_packet(pkt);
-            return 0;
+            goto empty_packet;
         }
     }
     else if (stream_index == rmd->audio.stream_index) {
@@ -329,8 +328,7 @@ static int read_packet(RawMediaDecoder* rmd, int stream_index, AVPacket* pkt) {
         if (rmd->audio.status != SS_NORMAL) {
             if (rmd->audio.status == SS_EOF_PENDING)
                 rmd->audio.status = SS_EOF;
-            av_init_packet(pkt);
-            return 0;
+            goto empty_packet;
         }
     }
 
@@ -355,8 +353,7 @@ static int read_packet(RawMediaDecoder* rmd, int stream_index, AVPacket* pkt) {
                 rmd->video.status = SS_EOF_PENDING;
             else
                 rmd->video.status = SS_EOF;
-            av_init_packet(pkt);
-            return 0;
+            goto empty_packet;
         }
         else if (stream_index == rmd->audio.stream_index) {
             AVCodec* codec = get_avstream(rmd, rmd->audio.stream_index)->codec->codec;
@@ -364,11 +361,15 @@ static int read_packet(RawMediaDecoder* rmd, int stream_index, AVPacket* pkt) {
                 rmd->audio.status = SS_EOF_PENDING;
             else
                 rmd->audio.status = SS_EOF;
-            av_init_packet(pkt);
-            return 0;
+            goto empty_packet;
         }
     }
     return r;
+
+empty_packet:
+    *pkt = (AVPacket){0};
+    av_init_packet(pkt);
+    return 0;
 }
 
 static inline int64_t frame_pts(AVFrame* avframe) {
@@ -427,22 +428,26 @@ static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts) {
 }
 
 // Return <0 on error.
-// Returns last frame after EOF.
+// Returns >0 if frame decoded.
+// Returns 0 if no frame decoded (EOF) and output was not modified.
 int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t* output) {
     int r = 0;
 
-    // If eof, we'll just continue sending the last frame
-    if (rmd->video.status != SS_EOF) {
-        int64_t expected_pts = rmd->video.current_frame * rmd->video.frame_duration;
-        if ((r = next_video_frame(rmd, expected_pts)) < 0)
-            return r;
-    }
+    if (rmd->video.status == SS_EOF)
+        return 0;
+
+    int64_t expected_pts = rmd->video.current_frame * rmd->video.frame_duration;
+    if ((r = next_video_frame(rmd, expected_pts)) < 0)
+        return r;
+
+    if (rmd->video.status == SS_EOF)
+        return 0;
 
     if ((r = scale_video(rmd, output)) < 0)
         return r;
 
     rmd->video.current_frame++;
-    return r;
+    return 1;
 }
 
 // Decode partial frame.
