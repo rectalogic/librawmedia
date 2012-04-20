@@ -147,7 +147,7 @@ static int init_decoder_info(RawMediaDecoder* rmd, const RawMediaDecoderConfig* 
     RawMediaDecoderInfo* info = &rmd->info;
 
     if (rmd->video.stream_index != INVALID_STREAM) {
-        info->has_video = 1;
+        info->has_video = true;
         int64_t duration = output_stream_duration(rmd, rmd->video.stream_index,
                                                   config->start_frame);
         if (info->duration < duration)
@@ -162,7 +162,7 @@ static int init_decoder_info(RawMediaDecoder* rmd, const RawMediaDecoderConfig* 
     }
 
     if (rmd->audio.stream_index != INVALID_STREAM) {
-        info->has_audio = 1;
+        info->has_audio = true;
         int64_t duration = output_stream_duration(rmd, rmd->audio.stream_index,
                                                   config->start_frame);
         if (info->duration < duration)

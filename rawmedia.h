@@ -2,6 +2,7 @@
 #define RM_RAWMEDIA_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 void rawmedia_init();
 
@@ -13,21 +14,21 @@ typedef struct RawMediaDecoderConfig {
 
     int start_frame;
 
-    int discard_video;
+    bool discard_video;
     //XXX video bounding box that we scale to meet?
 
-    int discard_audio;
+    bool discard_audio;
 } RawMediaDecoderConfig;
 
 typedef struct RawMediaDecoderInfo {
     int duration;                  // Duration in frames (max duration of audio and video), reduced by start_frame
 
-    int has_video;
+    bool has_video;
     int video_framebuffer_size;    // Frame buffer size in bytes
     int width;
     int height;
 
-    int has_audio;
+    bool has_audio;
     int audio_framebuffer_size;    // Frame buffer size in bytes
 } RawMediaDecoderInfo;
 
@@ -39,8 +40,8 @@ typedef struct RawMediaEncoderConfig {
     int width;
     int height;
 
-    int has_video;
-    int has_audio;
+    bool has_video;
+    bool has_audio;
 } RawMediaEncoderConfig;
 
 typedef struct RawMediaEncoderInfo {
