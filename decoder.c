@@ -367,7 +367,7 @@ static int read_packet(RawMediaDecoder* rmd, int stream_index, AVPacket* pkt) {
     return r;
 
 empty_packet:
-    *pkt = (AVPacket){0};
+    memset(pkt, 0, sizeof(*pkt));
     av_init_packet(pkt);
     return 0;
 }
@@ -563,7 +563,7 @@ static int resample_audio(RawMediaDecoder* rmd, uint8_t **output, int* output_nb
 }
 
 // Return <0 on error.
-// Returns silent output after EOF.
+// Decodes silent output after EOF.
 int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output) {
     int r = 0;
     int output_nb_samples = rmd->audio.output_samples_per_frame;
