@@ -494,24 +494,27 @@ static int decode_audio_frame(RawMediaDecoder* rmd) {
 }
 
 // Discard all input audio samples up until start_sample.
-// start_sample and samples_per_frame are both in source audio timebase
+// start_sample is in source audio timebase
 static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample) {
     int r = 0;
     AVRational audio_time_base = get_avstream(rmd, rmd->audio.stream_index)->time_base;
     int64_t samples_per_frame = av_rescale_q(1, rmd->time_base, audio_time_base);
     int64_t end_sample = start_sample + samples_per_frame - 1;
-    int decoded_nb_samples = 0;
+    int64_t decoded_start_sample = 0;
+    int64_t decoded_end_sample = 0;
     for (;;) {
-        if (start_sample <= decoded_nb_samples && decoded_nb_samples <= end_sample)
+        if (decoded_start_sample <= end_sample
+            && decoded_end_sample >= start_sample)
             break;
         if ((r = decode_audio_frame(rmd)) < 0)
             return r;
-        decoded_nb_samples += rmd->audio.avframe->nb_samples;
+        decoded_start_sample += rmd->audio.avframe->nb_samples;
+        decoded_end_sample = decoded_start_sample + samples_per_frame - 1;
         if (rmd->audio.status == SS_EOF)
             return r;
     }
 
-    int discard_input_nb_samples = decoded_nb_samples - start_sample;
+    int discard_input_nb_samples = decoded_start_sample - start_sample;
     if (discard_input_nb_samples <= 0)
         return r;
 
