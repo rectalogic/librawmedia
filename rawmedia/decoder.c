@@ -50,14 +50,8 @@ static inline AVStream* get_avstream(const RawMediaDecoder* rmd, int stream_inde
     return rmd->format_ctx->streams[stream_index];
 }
 
-static int open_decoder(RawMediaDecoder* rmd, int stream_index) {
+static int open_decoder(AVCodecContext* ctx, AVCodec* codec) {
     int r = 0;
-    if (stream_index == INVALID_STREAM)
-        return r;
-    AVCodecContext *ctx = get_avstream(rmd, stream_index)->codec;
-    AVCodec *codec = avcodec_find_decoder(ctx->codec_id);
-    if (codec == NULL)
-        return -1;
     // Disable threading, introduces codec delay
     AVDictionary* opts = NULL;
     av_dict_set(&opts, "threads", "1", 0);
@@ -191,9 +185,6 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
     if (!rmd)
         return NULL;
 
-    rmd->video.stream_index = INVALID_STREAM;
-    rmd->audio.stream_index = INVALID_STREAM;
-
     rmd->time_base = (AVRational){config->framerate_den, config->framerate_num};
 
     if ((r = avformat_open_input(&format_ctx, filename, NULL, NULL)) != 0) {
@@ -209,64 +200,84 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
         goto error;
     }
 
+    if (!config->discard_video) {
+        AVCodec* video_decoder = NULL;
+        r = av_find_best_stream(format_ctx, AVMEDIA_TYPE_VIDEO, -1, -1,
+                                &video_decoder, 0);
+        if (r >= 0) {
+            rmd->video.stream_index = r;
+            AVStream* stream = get_avstream(rmd, rmd->video.stream_index);
+            if ((r = open_decoder(stream->codec, video_decoder)) < 0) {
+                av_log(NULL, AV_LOG_FATAL,
+                       "%s: failed to open video decoder\n", filename);
+                goto error;
+            }
+            if (!(rmd->video.avframe = avcodec_alloc_frame()))
+                goto error;
+            rmd->video.frame_duration = av_rescale_q(1, rmd->time_base,
+                                                     stream->time_base);
+            rmd->video.current_frame = config->start_frame;
+
+            //XXX if we add support for config bounding box, take it into account here
+            rmd->video.height = stream->codec->height;
+            if (stream->sample_aspect_ratio.num) {
+                float aspect_ratio = av_q2d(stream->sample_aspect_ratio);
+                rmd->video.width = rint(rmd->video.height * aspect_ratio);
+            }
+            else
+                rmd->video.width = stream->codec->width;
+        }
+        else if (r == AVERROR_STREAM_NOT_FOUND
+                 || r == AVERROR_DECODER_NOT_FOUND)
+            rmd->video.stream_index = INVALID_STREAM;
+        else
+            goto error;
+    }
+    else
+        rmd->video.stream_index = INVALID_STREAM;
+
+    if (!config->discard_audio) {
+        AVCodec* audio_decoder = NULL;
+        r = av_find_best_stream(format_ctx, AVMEDIA_TYPE_AUDIO, -1, -1,
+                                &audio_decoder, 0);
+        if (r >= 0) {
+            rmd->audio.stream_index = r;
+            AVStream* stream = get_avstream(rmd, rmd->audio.stream_index);
+            if ((r = open_decoder(stream->codec, audio_decoder)) < 0) {
+                av_log(NULL, AV_LOG_FATAL,
+                       "%s: failed to open audio decoder\n", filename);
+                goto error;
+            }
+            if (!(rmd->audio.avframe = avcodec_alloc_frame()))
+                goto error;
+            // How many samples per frame at our target framerate/samplerate
+            rmd->audio.output_samples_per_frame =
+                av_rescale_q(1, rmd->time_base, RAWMEDIA_AUDIO_TIME_BASE);
+
+            if (create_audio_resample_ctx(rmd) < 0) {
+                av_log(NULL, AV_LOG_ERROR,
+                       "%s: failed to create audio resampling context\n", filename);
+                goto error;
+            }
+        }
+        else if (r == AVERROR_STREAM_NOT_FOUND
+                 || r == AVERROR_DECODER_NOT_FOUND)
+            rmd->audio.stream_index = INVALID_STREAM;
+        else
+            goto error;
+    }
+    else
+        rmd->audio.stream_index = INVALID_STREAM;
+
+    // Discard other streams
     for (int stream_index = 0; stream_index < format_ctx->nb_streams; stream_index++) {
-        AVStream* stream = format_ctx->streams[stream_index];
-        switch (stream->codec->codec_type) {
-        case AVMEDIA_TYPE_VIDEO:
-            if (!config->discard_video && rmd->video.stream_index == INVALID_STREAM) {
-                rmd->video.stream_index = stream_index;
-                if ((r = open_decoder(rmd, rmd->video.stream_index)) < 0) {
-                    av_log(NULL, AV_LOG_FATAL,
-                           "%s: failed to open video decoder\n", filename);
-                    goto error;
-                }
-                if (!(rmd->video.avframe = avcodec_alloc_frame()))
-                    goto error;
-                rmd->video.frame_duration = av_rescale_q(1, rmd->time_base,
-                                                         stream->time_base);
-                rmd->video.current_frame = config->start_frame;
-
-                //XXX if we add support for config bounding box, take it into account here
-                rmd->video.height = stream->codec->height;
-                if (stream->sample_aspect_ratio.num) {
-                    float aspect_ratio = av_q2d(stream->sample_aspect_ratio);
-                    rmd->video.width = rint(rmd->video.height * aspect_ratio);
-                }
-                else
-                    rmd->video.width = stream->codec->width;
-            }
-            else
-                stream->discard = AVDISCARD_ALL;
-            break;
-
-        case AVMEDIA_TYPE_AUDIO:
-            if (!config->discard_audio && rmd->audio.stream_index == INVALID_STREAM){
-                rmd->audio.stream_index = stream_index;
-                if ((r = open_decoder(rmd, rmd->audio.stream_index)) < 0) {
-                    av_log(NULL, AV_LOG_FATAL,
-                           "%s: failed to open audio decoder\n", filename);
-                    goto error;
-                }
-                if (!(rmd->audio.avframe = avcodec_alloc_frame()))
-                    goto error;
-                // How many samples per frame at our target framerate/samplerate
-                rmd->audio.output_samples_per_frame =
-                    av_rescale_q(1, rmd->time_base, RAWMEDIA_AUDIO_TIME_BASE);
-
-                if (create_audio_resample_ctx(rmd) < 0) {
-                    av_log(NULL, AV_LOG_ERROR,
-                           "%s: failed to create audio resampling context\n", filename);
-                    goto error;
-                }
-            }
-            else
-                stream->discard = AVDISCARD_ALL;
-            break;
-        default:
+        if (stream_index != rmd->video.stream_index
+            && stream_index != rmd->audio.stream_index) {
+            AVStream* stream = format_ctx->streams[stream_index];
             stream->discard = AVDISCARD_ALL;
-            break;
         }
     }
+
     if (rmd->video.stream_index == INVALID_STREAM
         && rmd->audio.stream_index == INVALID_STREAM) {
         av_log(NULL, AV_LOG_FATAL, "%s: could not find audio or video stream\n", filename);
