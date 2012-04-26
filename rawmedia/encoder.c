@@ -96,6 +96,11 @@ static int init_encoder_info(RawMediaEncoder* rme, const RawMediaEncoderConfig* 
 RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEncoderConfig* config) {
     int r = 0;
 
+    if (config->framerate_den == 0 || config->framerate_num == 0) {
+        av_log(NULL, AV_LOG_FATAL,
+               "%s: invalid framerate requested\n", filename);
+        return NULL;
+    }
     if (!config->has_video && !config->has_audio)
         return NULL;
 
@@ -202,7 +207,7 @@ const RawMediaEncoderInfo*  rawmedia_get_encoder_info(const RawMediaEncoder* rme
 }
 
 // Convert from decoder pixel format to encoder
-static int convert_video(RawMediaEncoder* rme, uint8_t* input) {
+static int convert_video(RawMediaEncoder* rme, const uint8_t* input) {
     struct RawMediaVideo* video = &rme->video;
     video->sws_ctx =
         sws_getCachedContext(video->sws_ctx,
@@ -215,7 +220,8 @@ static int convert_video(RawMediaEncoder* rme, uint8_t* input) {
     if (!video->sws_ctx)
         return -1;
     AVPicture input_picture;
-    avpicture_fill(&input_picture, input, RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
+    avpicture_fill(&input_picture, (uint8_t*)input,
+                   RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
                    video->width, video->height);
     sws_scale(video->sws_ctx,
               (const uint8_t* const*)input_picture.data, input_picture.linesize,
@@ -224,7 +230,7 @@ static int convert_video(RawMediaEncoder* rme, uint8_t* input) {
     return 0;
 }
 
-int rawmedia_encode_video(RawMediaEncoder* rme, uint8_t* input) {
+int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input) {
     int r = 0;
     struct RawMediaVideo* video = &rme->video;
     AVCodecContext* codec_ctx = video->avstream->codec;
@@ -247,7 +253,7 @@ int rawmedia_encode_video(RawMediaEncoder* rme, uint8_t* input) {
     return r;
 }
 
-int rawmedia_encode_audio(RawMediaEncoder* rme, uint8_t* input) {
+int rawmedia_encode_audio(RawMediaEncoder* rme, const uint8_t* input) {
     int r = 0;
     struct RawMediaAudio* audio = &rme->audio;
     AVPacket pkt = {0};

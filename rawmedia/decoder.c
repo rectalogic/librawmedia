@@ -180,6 +180,11 @@ static int init_decoder_info(RawMediaDecoder* rmd, const RawMediaDecoderConfig* 
 }
 
 RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDecoderConfig* config) {
+    if (config->framerate_den == 0 || config->framerate_num == 0) {
+        av_log(NULL, AV_LOG_FATAL,
+               "%s: invalid framerate requested\n", filename);
+        return NULL;
+    }
     int r = 0;
     RawMediaDecoder* rmd = av_mallocz(sizeof(RawMediaDecoder));
     AVFormatContext* format_ctx = NULL;
