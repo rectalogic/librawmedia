@@ -20,6 +20,8 @@ int main(int argc, const char *argv[]) {
     rawmedia_init();
     RawMediaDecoderConfig dconfig = { .framerate_num = FRAME_RATE_NUM,
                                       .framerate_den = FRAME_RATE_DEN,
+                                      .width = WIDTH,
+                                      .height = HEIGHT,
                                       .start_frame = START_FRAME };
     RawMediaDecoder* rmd = rawmedia_create_decoder(filename, &dconfig);
     if (!rmd)

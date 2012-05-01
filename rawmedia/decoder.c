@@ -46,7 +46,8 @@ struct RawMediaDecoder {
     RawMediaDecoderInfo info;
 };
 
-static inline int64_t frame_pts(AVFrame* avframe);
+static int64_t video_expected_pts(RawMediaDecoder* rmd);
+static inline int64_t video_frame_pts(AVFrame* avframe);
 static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts);
 static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample);
 
@@ -122,7 +123,7 @@ static int init_video_filters(RawMediaDecoder* rmd, const RawMediaDecoderConfig*
     inputs->pad_idx = 0;
     inputs->next = NULL;
 
-    // Scale to "meet" bounds, maintaining source aspect ratio.
+    // Scale to "meet" bounds, maintaining source aspect ratio, and without upscaling.
     // We specify both width and height, instead of using "-1" ("keep aspect")
     // because that just sets the aspect ratio and doesn't actually scale
     // the pixels.
@@ -170,7 +171,6 @@ static int create_audio_resample_ctx(RawMediaDecoder* rmd) {
 
 static int initial_seek(RawMediaDecoder* rmd, int start_frame, const char* filename) {
     int r = 0;
-//XXX should we seek even if 0? source video could have nonzero initial pts
     if (start_frame <= 0)
         return 0;
 
@@ -181,13 +181,17 @@ static int initial_seek(RawMediaDecoder* rmd, int start_frame, const char* filen
     int64_t video_pts = -1;
     // Skip frames in video seeking forward
     if (rmd->video.stream_index != INVALID_STREAM) {
-        video_pts = rmd->video.current_frame * rmd->video.frame_duration;
+        video_pts = video_expected_pts(rmd);
         if ((r = next_video_frame(rmd, video_pts)) < 0) {
             av_log(NULL, AV_LOG_FATAL, "%s: failed to seek video\n", filename);
             return r;
         }
-        // Save actual pts of frame we used, to compute audio offset below
-        video_pts = frame_pts(rmd->video.avframe);
+        // Save actual pts of frame we used, to compute audio offset below.
+        // Subtract start_time for cases where video pts does not start at 0
+        video_pts = video_frame_pts(rmd->video.avframe);
+        AVStream* stream = get_avstream(rmd, rmd->video.stream_index);
+        if (stream->start_time != AV_NOPTS_VALUE)
+            video_pts -= stream->start_time;
     }
 
     // Skip frames in audio seeking forward
@@ -254,9 +258,10 @@ static int init_decoder_info(RawMediaDecoder* rmd, const RawMediaDecoderConfig* 
 }
 
 RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDecoderConfig* config) {
-    if (config->framerate_den == 0 || config->framerate_num == 0) {
+    if (config->framerate_den <= 0 || config->framerate_num <= 0
+        || config->width <= 0 || config->height <= 0) {
         av_log(NULL, AV_LOG_FATAL,
-               "%s: invalid framerate requested\n", filename);
+               "%s: invalid size/framerate requested\n", filename);
         return NULL;
     }
     int r = 0;
@@ -462,7 +467,16 @@ empty_packet:
     return 0;
 }
 
-static inline int64_t frame_pts(AVFrame* avframe) {
+static int64_t video_expected_pts(RawMediaDecoder* rmd) {
+    struct RawMediaVideo* video = &rmd->video;
+    AVStream* stream = get_avstream(rmd, video->stream_index);
+    int64_t expected_pts = video->current_frame * video->frame_duration;
+    if (stream->start_time != AV_NOPTS_VALUE)
+        expected_pts += stream->start_time;
+    return expected_pts;
+}
+
+static inline int64_t video_frame_pts(AVFrame* avframe) {
     return *(int64_t*)av_opt_ptr(avcodec_get_frame_class(), avframe,
                                  "best_effort_timestamp");
 }
@@ -502,7 +516,7 @@ static int filter_video(RawMediaDecoder* rmd) {
 // Returns 0 if no new frame decoded, >0 if new frame decoded, <0 on error.
 static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts) {
     int r = 0;
-    while (expected_pts > frame_pts(rmd->video.avframe)) {
+    while (expected_pts > video_frame_pts(rmd->video.avframe)) {
         if ((r = decode_video_frame(rmd)) < 0)
             return r;
         if (rmd->video.status == SS_EOF)
@@ -528,7 +542,7 @@ int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* linesize)
         goto done;
     }
 
-    int64_t expected_pts = video->current_frame * video->frame_duration;
+    int64_t expected_pts = video_expected_pts(rmd);
     if ((r = next_video_frame(rmd, expected_pts)) < 0)
         return r;
 
