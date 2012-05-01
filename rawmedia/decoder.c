@@ -1,5 +1,8 @@
 #include <libavformat/avformat.h>
 #include <libavutil/opt.h>
+#include <libavfilter/avfiltergraph.h>
+#include <libavfilter/avcodec.h>
+#include <libavfilter/buffersink.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
 #include "rawmedia.h"
@@ -22,9 +25,10 @@ struct RawMediaDecoder {
         AVFrame* avframe;
         uint32_t current_frame;     // Frame number we are decoding
         uint32_t frame_duration;    // Frame duration in video timebase
-        int width;
-        int height;
-        struct SwsContext* sws_ctx;
+        AVFilterContext* buffersink_ctx;
+        AVFilterContext* buffersrc_ctx;
+        AVFilterGraph* filter_graph;
+        AVFilterBufferRef* picref;
         enum StreamStatus status;
     } video;
 
@@ -60,6 +64,88 @@ static int open_decoder(AVCodecContext* ctx, AVCodec* codec) {
     return r;
 }
 
+static int init_video_filters(RawMediaDecoder* rmd, const RawMediaDecoderConfig* config) {
+    int r = 0;
+    char args[512];
+    AVStream* stream = get_avstream(rmd, rmd->video.stream_index);
+    AVCodecContext* video_ctx = stream->codec;
+    AVFilterInOut* outputs = NULL;
+    AVFilterInOut* inputs = NULL;
+    static const enum PixelFormat pixel_fmts[] = { RAWMEDIA_VIDEO_PIXEL_FORMAT,
+                                                   PIX_FMT_NONE };
+
+    if (!(rmd->video.filter_graph = avfilter_graph_alloc())) {
+        r = -1;
+        goto error;
+    }
+    snprintf(args, sizeof(args), "%d:%d:%d:%d:%d:%d:%d:%d",
+             video_ctx->width, video_ctx->height, video_ctx->pix_fmt,
+             video_ctx->time_base.num, video_ctx->time_base.den,
+             video_ctx->sample_aspect_ratio.num,
+             video_ctx->sample_aspect_ratio.den, SWS_LANCZOS);
+    if ((r = avfilter_graph_create_filter(&rmd->video.buffersrc_ctx,
+                                          avfilter_get_by_name("buffer"),
+                                          "in", args, NULL,
+                                          rmd->video.filter_graph)) < 0)
+        goto error;
+
+#if FF_API_OLD_VSINK_API
+    r = avfilter_graph_create_filter(&rmd->video.buffersink_ctx,
+                                     avfilter_get_by_name("buffersink"),
+                                     "out", NULL, (void*)pixel_fmts,
+                                     rmd->video.filter_graph);
+#else
+    AVBufferSinkParams *buffersink_params = av_buffersink_params_alloc();
+    buffersink_params->pixel_fmts = pixel_fmts;
+    r = avfilter_graph_create_filter(&rmd->video.buffersink_ctx,
+                                     avfilter_get_by_name("buffersink"),
+                                     "out", NULL, buffersink_params,
+                                     rmd->video.filter_graph);
+    av_freep(&buffersink_params);
+#endif
+    if (r < 0)
+        goto error;
+
+    inputs = avfilter_inout_alloc();
+    outputs = avfilter_inout_alloc();
+    if (!inputs || !outputs) {
+        r = -1;
+        goto error;
+    }
+    outputs->name = av_strdup("in");
+    outputs->filter_ctx = rmd->video.buffersrc_ctx;
+    outputs->pad_idx = 0;
+    outputs->next = NULL;
+
+    inputs->name = av_strdup("out");
+    inputs->filter_ctx = rmd->video.buffersink_ctx;
+    inputs->pad_idx = 0;
+    inputs->next = NULL;
+
+    // Scale to "meet" bounds, maintaining source aspect ratio.
+    // We specify both width and height, instead of using "-1" ("keep aspect")
+    // because that just sets the aspect ratio and doesn't actually scale
+    // the pixels.
+    // After scaling, we center the image in the padded output bounds.
+    // %1$d is width, %2$d is height
+    snprintf(args, sizeof(args),
+             "scale=trunc(st(0\\,iw*sar)*min(1\\,min(%1$d/ld(0)\\,%2$d/ih))+0.5):ow/dar+0.5,"
+             "pad=max(%1$d\\,iw):max(%2$d\\,ih):max(0\\,(ow-iw)/2):max(0\\,(oh-ih)/2)",
+             config->width, config->height);
+    if ((r = avfilter_graph_parse(rmd->video.filter_graph, args,
+                                  &inputs, &outputs, NULL)) < 0)
+        goto error;
+    if ((r = avfilter_graph_config(rmd->video.filter_graph, NULL)) < 0)
+        goto error;
+
+    return r;
+
+error:
+    avfilter_inout_free(&inputs);
+    avfilter_inout_free(&outputs);
+    return r;
+}
+
 static int create_audio_resample_ctx(RawMediaDecoder* rmd) {
     struct RawMediaAudio* audio = &rmd->audio;
     AVCodecContext *audio_ctx = get_avstream(rmd, audio->stream_index)->codec;
@@ -84,6 +170,7 @@ static int create_audio_resample_ctx(RawMediaDecoder* rmd) {
 
 static int initial_seek(RawMediaDecoder* rmd, int start_frame, const char* filename) {
     int r = 0;
+//XXX should we seek even if 0? source video could have nonzero initial pts
     if (start_frame <= 0)
         return 0;
 
@@ -146,13 +233,6 @@ static int init_decoder_info(RawMediaDecoder* rmd, const RawMediaDecoderConfig* 
                                                   config->start_frame);
         if (info->duration < duration)
             info->duration = duration;
-        info->width = rmd->video.width;
-        info->height = rmd->video.height;
-        int size = avpicture_get_size(RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
-                                      info->width, info->height);
-        if (size <= 0)
-            return -1;
-        info->video_framebuffer_size = size;
     }
 
     if (rmd->audio.stream_index != INVALID_STREAM) {
@@ -217,15 +297,8 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
             rmd->video.frame_duration = av_rescale_q(1, rmd->time_base,
                                                      stream->time_base);
             rmd->video.current_frame = config->start_frame;
-
-            //XXX if we add support for config bounding box, take it into account here
-            rmd->video.height = stream->codec->height;
-            if (stream->sample_aspect_ratio.num) {
-                float aspect_ratio = av_q2d(stream->sample_aspect_ratio);
-                rmd->video.width = rint(rmd->video.height * aspect_ratio);
-            }
-            else
-                rmd->video.width = stream->codec->width;
+            if ((r = init_video_filters(rmd, config)) < 0)
+                goto error;
         }
         else if (r == AVERROR_STREAM_NOT_FOUND
                  || r == AVERROR_DECODER_NOT_FOUND)
@@ -301,10 +374,11 @@ void rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
     if (rmd) {
         if (rmd->format_ctx) {
             if (rmd->video.stream_index != INVALID_STREAM) {
+                avfilter_unref_buffer(rmd->video.picref);
+                avfilter_graph_free(&rmd->video.filter_graph);
                 avcodec_close(get_avstream(rmd, rmd->video.stream_index)->codec);
                 packet_queue_flush(&rmd->video.packetq);
                 av_free(rmd->video.avframe);
-                sws_freeContext(rmd->video.sws_ctx);
             }
             if (rmd->audio.stream_index != INVALID_STREAM) {
                 avcodec_close(get_avstream(rmd, rmd->audio.stream_index)->codec);
@@ -393,6 +467,7 @@ static inline int64_t frame_pts(AVFrame* avframe) {
                                  "best_effort_timestamp");
 }
 
+// Returns 0 if no new frame decoded (EOF), >0 if new frame decoded, <0 on error.
 static int decode_video_frame(RawMediaDecoder* rmd) {
     int r = 0;
     AVCodecContext *video_ctx = get_avstream(rmd, rmd->video.stream_index)->codec;
@@ -404,34 +479,27 @@ static int decode_video_frame(RawMediaDecoder* rmd) {
             return r;
         av_free_packet(&pkt);
         if (rmd->video.status == SS_EOF)
+            return got_picture;
+    }
+    return r < 0 ? r : got_picture;
+}
+
+static int filter_video(RawMediaDecoder* rmd) {
+    int r = 0;
+    struct RawMediaVideo* video = &rmd->video;
+    if ((r = av_vsrc_buffer_add_frame(video->buffersrc_ctx, video->avframe, 0)) < 0)
+        return r;
+    if (avfilter_poll_frame(video->buffersink_ctx->inputs[0])) {
+        // Unref previous buffer
+        avfilter_unref_bufferp(&video->picref);
+        if ((r = av_buffersink_get_buffer_ref(video->buffersink_ctx,
+                                              &video->picref, 0)) < 0)
             return r;
     }
     return r;
 }
 
-static int scale_video(RawMediaDecoder* rmd, uint8_t* output) {
-    struct RawMediaVideo* video = &rmd->video;
-    AVFrame* frame = video->avframe;
-    rmd->video.sws_ctx =
-        sws_getCachedContext(video->sws_ctx,
-                             frame->width, frame->height,
-                             frame->format,
-                             video->width, video->height,
-                             RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
-                             SWS_LANCZOS|SWS_ACCURATE_RND|SWS_FULL_CHR_H_INT,
-                             NULL, NULL, NULL);
-    if (!video->sws_ctx)
-        return -1;
-    AVPicture picture;
-    avpicture_fill(&picture, output, RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
-                   video->width, video->height);
-    sws_scale(video->sws_ctx,
-              (const uint8_t* const*)frame->data, frame->linesize,
-              0, frame->height,
-              picture.data, picture.linesize);
-    return 0;
-}
-
+// Returns 0 if no new frame decoded, >0 if new frame decoded, <0 on error.
 static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts) {
     int r = 0;
     while (expected_pts > frame_pts(rmd->video.avframe)) {
@@ -445,25 +513,46 @@ static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts) {
 
 // Return <0 on error.
 // Returns >0 if frame decoded.
-// Returns 0 if no frame decoded (EOF) and output was not modified.
-int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t* output) {
+// Returns 0 if no new frame decoded (EOF)
+// output will be set to point to internal memory valid until the next call
+// linesize will be set to the line stride size of output.
+//   Multiply by height to get total buffer size.
+int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* linesize) {
     int r = 0;
+    struct RawMediaVideo* video = &rmd->video;
+    *linesize = 0;
+    *output = NULL;
 
-    if (rmd->video.status == SS_EOF)
-        return 0;
+    if (video->status == SS_EOF) {
+        r = 0;
+        goto done;
+    }
 
-    int64_t expected_pts = rmd->video.current_frame * rmd->video.frame_duration;
+    int64_t expected_pts = video->current_frame * video->frame_duration;
     if ((r = next_video_frame(rmd, expected_pts)) < 0)
         return r;
 
-    if (rmd->video.status == SS_EOF)
-        return 0;
+    if (video->status == SS_EOF) {
+        r = 0;
+        goto done;
+    }
 
-    if ((r = scale_video(rmd, output)) < 0)
-        return r;
+    // If we decoded a new frame, filter it
+    if (video->avframe->format != PIX_FMT_NONE) {
+        if ((r = filter_video(rmd)) < 0)
+            return r;
+        video->current_frame++;
+        r = 1;
+    }
+    else
+        r = 0;
 
-    rmd->video.current_frame++;
-    return 1;
+done:
+    if (video->picref) {
+        *linesize = video->picref->linesize[0];
+        *output = video->picref->data[0];
+    }
+    return r;
 }
 
 // Decode partial frame.

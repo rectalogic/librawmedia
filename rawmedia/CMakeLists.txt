@@ -3,8 +3,8 @@ pkg_check_modules(FFMPEG REQUIRED
   libavcodec
   libavformat
   libavutil
-  libswscale
   libswresample
+  libavfilter
 )
 include_directories(${FFMPEG_INCLUDE_DIRS})
 link_directories(${FFMPEG_LIBRARY_DIRS})
