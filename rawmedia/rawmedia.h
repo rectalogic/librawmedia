@@ -1,22 +1,39 @@
 #ifndef RM_RAWMEDIA_H
 #define RM_RAWMEDIA_H
 
+#ifdef rawmedia_EXPORTS
+    #include "exports.h"
+#else
+    #define RAWMEDIA_IMPORT
+    #define RAWMEDIA_EXPORT
+    #define RAWMEDIA_LOCAL
+#endif
 #include <stdint.h>
 #include <stdbool.h>
 
-void rawmedia_init();
+typedef struct RawMediaSession {
+    // Target framerate
+    int framerate_num;
+    int framerate_den;
+    // Video will be scaled and padded to fit these bounds
+    int width;
+    int height;
+
+    // This will be set to required audio buffer size after initialization.
+    // This is the number of bytes returned on decode, and expected on encode.
+    int audio_framebuffer_size;
+} RawMediaSession;
 
 typedef struct RawMediaDecoder RawMediaDecoder;
 
 typedef struct RawMediaDecoderConfig {
-    int framerate_num;
-    int framerate_den;
-
     int start_frame;
 
-    bool discard_video;
-    //XXX video bounding box that we scale to meet?
+    // Linear 0..1. Caller should convert from exponential.
+    // See http://www.dr-lex.be/info-stuff/volumecontrols.html
+    float volume;
 
+    bool discard_video;
     bool discard_audio;
 } RawMediaDecoderConfig;
 
@@ -24,42 +41,30 @@ typedef struct RawMediaDecoderInfo {
     int duration;                  // Duration in frames (max duration of audio and video), reduced by start_frame
 
     bool has_video;
-    int video_framebuffer_size;    // Frame buffer size in bytes
-    int width;
-    int height;
-
     bool has_audio;
-    int audio_framebuffer_size;    // Frame buffer size in bytes
 } RawMediaDecoderInfo;
 
 typedef struct RawMediaEncoder RawMediaEncoder;
 
 typedef struct RawMediaEncoderConfig {
-    int framerate_num;
-    int framerate_den;
-    int width;
-    int height;
-
     bool has_video;
     bool has_audio;
 } RawMediaEncoderConfig;
 
-typedef struct RawMediaEncoderInfo {
-    int video_framebuffer_size;    // Frame buffer size in bytes
-    int audio_framebuffer_size;    // Frame buffer size in bytes
-} RawMediaEncoderInfo;
 
-RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDecoderConfig* config);
-const RawMediaDecoderInfo* rawmedia_get_decoder_info(const RawMediaDecoder* rmd);
-// output must be the size indicated in RawMediaDecoderInfo
-int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t* output);
-int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output);
-void rawmedia_destroy_decoder(RawMediaDecoder* rmd);
+RAWMEDIA_EXPORT int rawmedia_init_session(RawMediaSession* session);
 
-RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEncoderConfig* config);
-const RawMediaEncoderInfo* rawmedia_get_encoder_info(const RawMediaEncoder* rme);
-int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input);
-int rawmedia_encode_audio(RawMediaEncoder* rme, const uint8_t* input);
-void rawmedia_destroy_encoder(RawMediaEncoder* rme);
+RAWMEDIA_EXPORT RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaSession* session, const RawMediaDecoderConfig* config);
+RAWMEDIA_EXPORT const RawMediaDecoderInfo* rawmedia_get_decoder_info(const RawMediaDecoder* rmd);
+RAWMEDIA_EXPORT int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* linesize);
+// output must be the size indicated in RawMediaSession
+RAWMEDIA_EXPORT int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output);
+RAWMEDIA_EXPORT void rawmedia_destroy_decoder(RawMediaDecoder* rmd);
+
+RAWMEDIA_EXPORT RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaSession* session, const RawMediaEncoderConfig* config);
+RAWMEDIA_EXPORT int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input, int linesize);
+// input must be the size indicated in RawMediaSession
+RAWMEDIA_EXPORT int rawmedia_encode_audio(RawMediaEncoder* rme, const uint8_t* input);
+RAWMEDIA_EXPORT void rawmedia_destroy_encoder(RawMediaEncoder* rme);
 
 #endif

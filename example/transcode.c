@@ -4,6 +4,8 @@
 #define FRAME_RATE_NUM 30
 #define FRAME_RATE_DEN 1
 #define START_FRAME 15
+#define WIDTH 320
+#define HEIGHT 240
 
 int main(int argc, const char *argv[]) {
     if (argc != 5) {
@@ -15,11 +17,17 @@ int main(int argc, const char *argv[]) {
     const char* audio_filename = argv[3];
     const char* video_filename = argv[4];
 
-    rawmedia_init();
-    RawMediaDecoderConfig dconfig = { .framerate_num = FRAME_RATE_NUM,
-                                      .framerate_den = FRAME_RATE_DEN,
+    RawMediaSession session = {
+        .framerate_num = FRAME_RATE_NUM,
+        .framerate_den = FRAME_RATE_DEN,
+        .width = WIDTH,
+        .height = HEIGHT,
+    };
+    if (rawmedia_init_session(&session) < 0)
+        return -1;
+    RawMediaDecoderConfig dconfig = { .volume = 1,
                                       .start_frame = START_FRAME };
-    RawMediaDecoder* rmd = rawmedia_create_decoder(filename, &dconfig);
+    RawMediaDecoder* rmd = rawmedia_create_decoder(filename, &session, &dconfig);
     if (!rmd)
         return -1;
 
@@ -33,20 +41,17 @@ int main(int argc, const char *argv[]) {
 
     const RawMediaDecoderInfo* info = rawmedia_get_decoder_info(rmd);
 
-    RawMediaEncoderConfig econfig = { .framerate_num = FRAME_RATE_NUM,
-                                      .framerate_den = FRAME_RATE_DEN,
-                                      .width = info->width,
-                                      .height = info->height,
-                                      .has_video = info->has_video,
+    RawMediaEncoderConfig econfig = { .has_video = info->has_video,
                                       .has_audio = info->has_audio };
-    RawMediaEncoder* rme = rawmedia_create_encoder(output_filename, &econfig);
+    RawMediaEncoder* rme = rawmedia_create_encoder(output_filename, &session, &econfig);
     if (!rme)
         return -1;
 
-    uint8_t video_buffer[info->video_framebuffer_size];
-    uint8_t audio_buffer[info->audio_framebuffer_size];
+    uint8_t *video_buffer = NULL;
+    int linesize = 0;
+    uint8_t audio_buffer[session.audio_framebuffer_size];
     for (int frame = 0; frame < info->duration; frame++) {
-        if (rawmedia_decode_video(rmd, video_buffer) < 0) {
+        if (rawmedia_decode_video(rmd, &video_buffer, &linesize) < 0) {
             fprintf(stderr, "Failed to decode video.\n");
             return -1;
         }
@@ -54,7 +59,7 @@ int main(int argc, const char *argv[]) {
             fprintf(stderr, "Failed to decode audio.\n");
             return -1;
         }
-        if (rawmedia_encode_video(rme, video_buffer) < 0) {
+        if (rawmedia_encode_video(rme, video_buffer, linesize) < 0) {
             fprintf(stderr, "Failed to encode video.\n");
             return -1;
         }
@@ -62,7 +67,7 @@ int main(int argc, const char *argv[]) {
             fprintf(stderr, "Failed to encode audio.\n");
             return -1;
         }
-        if (fwrite(video_buffer, sizeof(video_buffer), 1, video_fp) < 1) {
+        if (fwrite(video_buffer, linesize * session.height, 1, video_fp) < 1) {
             fprintf(stderr, "Failed to write video.\n");
             return -1;
         }

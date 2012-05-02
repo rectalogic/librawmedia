@@ -1,6 +1,5 @@
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
 #include <libavutil/intreadwrite.h>
 #include "rawmedia.h"
 #include "rawmedia_internal.h"
@@ -11,20 +10,16 @@ struct RawMediaEncoder {
     struct RawMediaVideo {
         AVStream* avstream;
         AVFrame* avframe;
-        int width;
-        int height;
-        struct SwsContext* sws_ctx;
     } video;
 
     struct RawMediaAudio {
         AVStream* avstream;
         AVFrame* avframe;
+        int framebuffer_size;
     } audio;
-
-    RawMediaEncoderInfo info;
 };
 
-static AVStream* add_video_stream(AVFormatContext* format_ctx, const RawMediaEncoderConfig* config) {
+static AVStream* add_video_stream(AVFormatContext* format_ctx, const RawMediaSession* session) {
     AVStream* avstream = NULL;
     AVCodec* codec = avcodec_find_encoder(RAWMEDIA_VIDEO_CODEC);
     if (!codec)
@@ -34,11 +29,11 @@ static AVStream* add_video_stream(AVFormatContext* format_ctx, const RawMediaEnc
         return NULL;
     AVCodecContext* codec_ctx = avstream->codec;
     codec_ctx->codec_id = RAWMEDIA_VIDEO_CODEC;
-    codec_ctx->width = config->width;
-    codec_ctx->height = config->height;
-    codec_ctx->time_base.num = config->framerate_den;
-    codec_ctx->time_base.den = config->framerate_num;
-    codec_ctx->pix_fmt = RAWMEDIA_VIDEO_ENCODE_PIXEL_FORMAT;
+    codec_ctx->width = session->width;
+    codec_ctx->height = session->height;
+    codec_ctx->time_base.num = session->framerate_den;
+    codec_ctx->time_base.den = session->framerate_num;
+    codec_ctx->pix_fmt = RAWMEDIA_VIDEO_PIXEL_FORMAT;
     if (format_ctx->oformat->flags & AVFMT_GLOBALHEADER)
         codec_ctx->flags |= CODEC_FLAG_GLOBAL_HEADER;
     codec_ctx->codec_tag = AV_RL32(RAWMEDIA_VIDEO_ENCODE_CODEC_TAG);
@@ -49,7 +44,7 @@ static AVStream* add_video_stream(AVFormatContext* format_ctx, const RawMediaEnc
     return avstream;
 }
 
-static AVStream* add_audio_stream(AVFormatContext* format_ctx, const RawMediaEncoderConfig* config) {
+static AVStream* add_audio_stream(AVFormatContext* format_ctx) {
     AVStream* avstream = NULL;
     AVCodec* codec = avcodec_find_encoder(RAWMEDIA_AUDIO_CODEC);
     if (!codec)
@@ -70,38 +65,10 @@ static AVStream* add_audio_stream(AVFormatContext* format_ctx, const RawMediaEnc
     return avstream;
 }
 
-static int init_encoder_info(RawMediaEncoder* rme, const RawMediaEncoderConfig* config) {
-    RawMediaEncoderInfo* info = &rme->info;
-
-    if (rme->video.avstream) {
-        int size = avpicture_get_size(RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
-                                      config->width, config->height);
-        if (size <= 0)
-            return -1;
-        info->video_framebuffer_size = size;
-    }
-
-    if (rme->audio.avstream) {
-        int nb_channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
-        int size = av_samples_get_buffer_size(NULL, nb_channels,
-                                              rme->audio.avframe->nb_samples,
-                                              RAWMEDIA_AUDIO_SAMPLE_FMT, 1);
-        if (size <= 0)
-            return -1;
-        info->audio_framebuffer_size = size;
-    }
-    return 0;
-}
-
-RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEncoderConfig* config) {
+RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaSession* session, const RawMediaEncoderConfig* config) {
     int r = 0;
-
-    if (config->framerate_den == 0 || config->framerate_num == 0) {
-        av_log(NULL, AV_LOG_FATAL,
-               "%s: invalid framerate requested\n", filename);
-        return NULL;
-    }
-    if (!config->has_video && !config->has_audio)
+    if ((!config->has_video && !config->has_audio)
+        || session->audio_framebuffer_size <= 0)
         return NULL;
 
     RawMediaEncoder* rme = av_mallocz(sizeof(RawMediaEncoder));
@@ -118,25 +85,19 @@ RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEnc
     rme->format_ctx = format_ctx;
 
     if (config->has_video) {
-        rme->video.avstream = add_video_stream(format_ctx, config);
+        rme->video.avstream = add_video_stream(format_ctx, session);
         if (!rme->video.avstream) {
             av_log(NULL, AV_LOG_FATAL, "%s: failed to create video stream.\n",
                    filename);
             goto error;
         }
-        rme->video.width = config->width;
-        rme->video.height = config->height;
         if (!(rme->video.avframe = avcodec_alloc_frame()))
-            goto error;
-        if (avpicture_alloc((AVPicture*)rme->video.avframe,
-                            RAWMEDIA_VIDEO_ENCODE_PIXEL_FORMAT,
-                            rme->video.width, rme->video.height) < 0)
             goto error;
         rme->video.avframe->pts = 0;
     }
 
     if (config->has_audio) {
-        rme->audio.avstream = add_audio_stream(format_ctx, config);
+        rme->audio.avstream = add_audio_stream(format_ctx);
         if (!rme->audio.avstream) {
             av_log(NULL, AV_LOG_FATAL, "%s: failed to create audio stream.\n",
                    filename);
@@ -145,10 +106,11 @@ RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEnc
         if (!(rme->audio.avframe = avcodec_alloc_frame()))
             goto error;
         rme->audio.avframe->pts = 0;
-        AVRational time_base = (AVRational){config->framerate_den,
-                                            config->framerate_num};
+        AVRational time_base = (AVRational){session->framerate_den,
+                                            session->framerate_num};
         rme->audio.avframe->nb_samples =
             av_rescale_q(1, time_base, RAWMEDIA_AUDIO_TIME_BASE);
+        rme->audio.framebuffer_size = session->audio_framebuffer_size;
     }
 
     if (!(format_ctx->flags & AVFMT_NOFILE)) {
@@ -164,9 +126,6 @@ RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaEnc
                filename);
         goto error;
     }
-
-    if (init_encoder_info(rme, config) < 0)
-        goto error;
 
     return rme;
 
@@ -184,9 +143,7 @@ void rawmedia_destroy_encoder(RawMediaEncoder* rme) {
             // Close codecs
             if (rme->video.avstream) {
                 avcodec_close(rme->video.avstream->codec);
-                avpicture_free((AVPicture*)rme->video.avframe);
                 av_free(rme->video.avframe);
-                sws_freeContext(rme->video.sws_ctx);
             }
             if (rme->audio.avstream) {
                 avcodec_close(rme->audio.avstream->codec);
@@ -202,42 +159,16 @@ void rawmedia_destroy_encoder(RawMediaEncoder* rme) {
     }
 }
 
-const RawMediaEncoderInfo*  rawmedia_get_encoder_info(const RawMediaEncoder* rme) {
-    return &rme->info;
-}
-
-// Convert from decoder pixel format to encoder
-static int convert_video(RawMediaEncoder* rme, const uint8_t* input) {
-    struct RawMediaVideo* video = &rme->video;
-    video->sws_ctx =
-        sws_getCachedContext(video->sws_ctx,
-                             video->width, video->height,
-                             RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
-                             video->width, video->height,
-                             RAWMEDIA_VIDEO_ENCODE_PIXEL_FORMAT,
-                             SWS_BICUBIC,
-                             NULL, NULL, NULL);
-    if (!video->sws_ctx)
-        return -1;
-    AVPicture input_picture;
-    avpicture_fill(&input_picture, (uint8_t*)input,
-                   RAWMEDIA_VIDEO_DECODE_PIXEL_FORMAT,
-                   video->width, video->height);
-    sws_scale(video->sws_ctx,
-              (const uint8_t* const*)input_picture.data, input_picture.linesize,
-              0, video->height,
-              video->avframe->data, video->avframe->linesize);
-    return 0;
-}
-
-int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input) {
+// input must be in RAWMEDIA_VIDEO_PIXEL_FORMAT
+// linesize is the stride of each line in input (in bytes)
+int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input, int linesize) {
     int r = 0;
     struct RawMediaVideo* video = &rme->video;
     AVCodecContext* codec_ctx = video->avstream->codec;
     AVPacket pkt = {0};
 
-    if ((r = convert_video(rme, input)) < 0)
-        return r;
+    video->avframe->data[0] = (uint8_t*)input;
+    video->avframe->linesize[0] = linesize;
 
     int got_packet = 0;
     if ((r = avcodec_encode_video2(codec_ctx, &pkt, video->avframe, &got_packet)) < 0)
@@ -250,6 +181,9 @@ int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input) {
 
     video->avframe->pts += video->avstream->codec->time_base.num;
 
+    video->avframe->data[0] = NULL;
+    video->avframe->linesize[0] = 0;
+
     return r;
 }
 
@@ -261,7 +195,7 @@ int rawmedia_encode_audio(RawMediaEncoder* rme, const uint8_t* input) {
     int nb_channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
     if ((r = avcodec_fill_audio_frame(audio->avframe, nb_channels,
                                       RAWMEDIA_AUDIO_SAMPLE_FMT, input,
-                                      rme->info.audio_framebuffer_size, 1)))
+                                      rme->audio.framebuffer_size, 1)))
         return r;
 
     int got_packet = 0;
