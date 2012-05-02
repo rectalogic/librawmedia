@@ -122,19 +122,18 @@ class Decoder:
             raise RawMediaError, "Failed to create Decoder for %s" % filename
         self._info = _librawmedia.rawmedia_get_decoder_info(self._decoder).contents
 
-        self._audio_framebuffer_size = session.audio_framebuffer_size
+        self._audio_buffer_type = c.c_uint8 * session.audio_framebuffer_size
         self._buffer = c.POINTER(c.c_uint8)()
         self._linesize = c.c_int(0)
 
     def create_audio_buffer(self):
-        return c.create_string_buffer(self._audio_framebuffer_size)
+        return self._audio_buffer_type()
 
     def decode_video(self):
         """Returns a ctypes c_uint8 array buffer, valid until the next decode, and linesize"""
-        #XXX need byref for _buffer?
         _librawmedia.rawmedia_decode_video(self._decoder, self._buffer,
                                            c.byref(self._linesize))
-        return self._buffer.contents, self._linesize.value
+        return self._buffer, self._linesize.value
 
     def decode_audio(self, buffer):
         _librawmedia.rawmedia_decode_audio(self._decoder,
@@ -171,7 +170,9 @@ class Encoder:
             raise RawMediaError, "Failed to create Encoder for %s" % filename
 
     def encode_video(self, buffer, linesize):
-        _librawmedia.rawmedia_encode_video(self._encoder, buffer, linesize)
+        _librawmedia.rawmedia_encode_video(self._encoder,
+                                           c.cast(buffer, c.POINTER(c.c_uint8)),
+                                           linesize)
 
     def encode_audio(self, buffer):
         _librawmedia.rawmedia_encode_audio(self._encoder,
