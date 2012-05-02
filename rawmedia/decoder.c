@@ -3,8 +3,8 @@
 #include <libavfilter/avfiltergraph.h>
 #include <libavfilter/avcodec.h>
 #include <libavfilter/buffersink.h>
+#include <libavfilter/asrc_abuffer.h>
 #include <libswscale/swscale.h>
-#include <libswresample/swresample.h>
 #include "rawmedia.h"
 #include "rawmedia_internal.h"
 #include "packet_queue.h"
@@ -39,7 +39,11 @@ struct RawMediaDecoder {
         int output_samples_per_frame;
         AVPacket pkt;
         AVPacket pkt_partial;
-        struct SwrContext* swr_ctx;
+        AVFilterContext* abuffersink_ctx;
+        AVFilterContext* abuffersrc_ctx;
+        AVFilterGraph* filter_graph;
+        AVFilterBufferRef* samplesref;
+        int nb_samples_consumed; // Number of samples already consumed from samplesref
         enum StreamStatus status;
     } audio;
 
@@ -147,26 +151,85 @@ error:
     return r;
 }
 
-static int create_audio_resample_ctx(RawMediaDecoder* rmd) {
-    struct RawMediaAudio* audio = &rmd->audio;
-    AVCodecContext *audio_ctx = get_avstream(rmd, audio->stream_index)->codec;
-    int64_t channel_layout = (audio_ctx->channel_layout
-                              && audio_ctx->channels == av_get_channel_layout_nb_channels(audio_ctx->channel_layout))
-        ? audio_ctx->channel_layout
-        : av_get_default_channel_layout(audio_ctx->channels);
+static int init_audio_filters(RawMediaDecoder* rmd, const RawMediaDecoderConfig* config) {
+    int r = 0;
+    char args[512];
+    AVStream* stream = get_avstream(rmd, rmd->audio.stream_index);
+    AVCodecContext* audio_ctx = stream->codec;
+    AVFilterInOut* outputs = NULL;
+    AVFilterInOut* inputs = NULL;
+    static const enum AVSampleFormat sample_fmts[] = { RAWMEDIA_AUDIO_SAMPLE_FMT,
+                                                       AV_SAMPLE_FMT_NONE };
+    int packing_fmts[] =
+        { av_sample_fmt_is_planar(RAWMEDIA_AUDIO_SAMPLE_FMT)
+          ? AVFILTER_PLANAR
+          : AVFILTER_PACKED,
+          -1 };
+    static const int64_t chlayouts[] = { RAWMEDIA_AUDIO_CHANNEL_LAYOUT, -1 };
 
-    audio->swr_ctx =
-        swr_alloc_set_opts(NULL,
-                           RAWMEDIA_AUDIO_CHANNEL_LAYOUT,
-                           RAWMEDIA_AUDIO_SAMPLE_FMT,
-                           RAWMEDIA_AUDIO_SAMPLE_RATE,
-                           channel_layout,
-                           audio_ctx->sample_fmt,
-                           audio_ctx->sample_rate,
-                           0, NULL);
-    if (!audio->swr_ctx || swr_init(audio->swr_ctx) < 0)
-        return -1;
-    return 0;
+    if (!(rmd->audio.filter_graph = avfilter_graph_alloc())) {
+        r = -1;
+        goto error;
+    }
+
+    if (!audio_ctx->channel_layout)
+        audio_ctx->channel_layout = av_get_default_channel_layout(audio_ctx->channels);
+    snprintf(args, sizeof(args), "%d:%d:0x%"PRIx64":%s",
+             audio_ctx->sample_rate, audio_ctx->sample_fmt,
+             audio_ctx->channel_layout,
+             av_sample_fmt_is_planar(audio_ctx->sample_fmt) ? "planar" : "packed");
+    if ((r = avfilter_graph_create_filter(&rmd->audio.abuffersrc_ctx,
+                                          avfilter_get_by_name("abuffer"),
+                                          "in", args, NULL,
+                                          rmd->audio.filter_graph)) < 0)
+        goto error;
+
+    AVABufferSinkParams *abuffersink_params = av_abuffersink_params_alloc();
+    abuffersink_params->sample_fmts = sample_fmts;
+    abuffersink_params->channel_layouts = chlayouts;
+    abuffersink_params->packing_fmts = packing_fmts;
+    r = avfilter_graph_create_filter(&rmd->audio.abuffersink_ctx,
+                                     avfilter_get_by_name("abuffersink"),
+                                     "out", NULL, abuffersink_params,
+                                     rmd->audio.filter_graph);
+    av_freep(&abuffersink_params);
+    if (r < 0)
+        goto error;
+
+    inputs = avfilter_inout_alloc();
+    outputs = avfilter_inout_alloc();
+    if (!inputs || !outputs) {
+        r = -1;
+        goto error;
+    }
+    outputs->name = av_strdup("in");
+    outputs->filter_ctx = rmd->audio.abuffersrc_ctx;
+    outputs->pad_idx = 0;
+    outputs->next = NULL;
+
+    inputs->name = av_strdup("out");
+    inputs->filter_ctx = rmd->audio.abuffersink_ctx;
+    inputs->pad_idx = 0;
+    inputs->next = NULL;
+
+    int length = snprintf(args, sizeof(args), "aconvert,aresample=%d",
+                          RAWMEDIA_AUDIO_SAMPLE_RATE);
+    if (config->volume < 1) {
+        snprintf(&args[length], sizeof(args) - length, ",volume=%f",
+                 config->volume);
+    }
+    if ((r = avfilter_graph_parse(rmd->audio.filter_graph, args,
+                                  &inputs, &outputs, NULL)) < 0)
+        goto error;
+    if ((r = avfilter_graph_config(rmd->audio.filter_graph, NULL)) < 0)
+        goto error;
+
+    return r;
+
+error:
+    avfilter_inout_free(&inputs);
+    avfilter_inout_free(&outputs);
+    return r;
 }
 
 static int initial_seek(RawMediaDecoder* rmd, int start_frame, const char* filename) {
@@ -314,7 +377,7 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
     else
         rmd->video.stream_index = INVALID_STREAM;
 
-    if (!config->discard_audio) {
+    if (!config->discard_audio && config->volume > 0) {
         AVCodec* audio_decoder = NULL;
         r = av_find_best_stream(format_ctx, AVMEDIA_TYPE_AUDIO, -1, -1,
                                 &audio_decoder, 0);
@@ -332,11 +395,8 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
             rmd->audio.output_samples_per_frame =
                 av_rescale_q(1, rmd->time_base, RAWMEDIA_AUDIO_TIME_BASE);
 
-            if (create_audio_resample_ctx(rmd) < 0) {
-                av_log(NULL, AV_LOG_ERROR,
-                       "%s: failed to create audio resampling context\n", filename);
+            if ((r = init_audio_filters(rmd, config)) < 0)
                 goto error;
-            }
         }
         else if (r == AVERROR_STREAM_NOT_FOUND
                  || r == AVERROR_DECODER_NOT_FOUND)
@@ -386,12 +446,13 @@ void rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
                 av_free(rmd->video.avframe);
             }
             if (rmd->audio.stream_index != INVALID_STREAM) {
+                avfilter_unref_buffer(rmd->audio.samplesref);
+                avfilter_graph_free(&rmd->audio.filter_graph);
                 avcodec_close(get_avstream(rmd, rmd->audio.stream_index)->codec);
                 packet_queue_flush(&rmd->audio.packetq);
                 av_free(rmd->audio.avframe);
                 // Don't free audio.pkt_partial, it's a copy of audio.pkt
                 av_free_packet(&rmd->audio.pkt);
-                swr_free(&rmd->audio.swr_ctx);
             }
 
             avformat_close_input(&rmd->format_ctx);
@@ -498,6 +559,7 @@ static int decode_video_frame(RawMediaDecoder* rmd) {
     return r < 0 ? r : got_picture;
 }
 
+// Filters decoded video from avframe to picref
 static int filter_video(RawMediaDecoder* rmd) {
     int r = 0;
     struct RawMediaVideo* video = &rmd->video;
@@ -612,6 +674,30 @@ static int decode_audio_frame(RawMediaDecoder* rmd) {
     return r;
 }
 
+// Filters decoded audio data from avframe to samplesref
+static int filter_audio(RawMediaDecoder* rmd) {
+    int r = 0;
+    struct RawMediaAudio* audio = &rmd->audio;
+    AVFrame* avframe = audio->avframe;
+    if ((r = av_asrc_buffer_add_samples(audio->abuffersrc_ctx,
+                                        avframe->data, avframe->linesize,
+                                        avframe->nb_samples,
+                                        avframe->sample_rate, avframe->format,
+                                        avframe->channel_layout,
+                                        av_sample_fmt_is_planar(avframe->format),
+                                        avframe->pts, 0)) < 0)
+        return r;
+    if (avfilter_poll_frame(audio->abuffersink_ctx->inputs[0])) {
+        // Unref previous buffer
+        avfilter_unref_bufferp(&audio->samplesref);
+        if ((r = av_buffersink_get_buffer_ref(audio->abuffersink_ctx,
+                                              &audio->samplesref, 0)) < 0)
+            return r;
+        audio->nb_samples_consumed = 0;
+    }
+    return r;
+}
+
 // Discard all input audio samples up until start_sample.
 // start_sample is in source audio timebase
 static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample) {
@@ -641,67 +727,61 @@ static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample) {
         av_rescale_q(discard_input_nb_samples, audio_time_base,
                      RAWMEDIA_AUDIO_TIME_BASE);
 
-    int nb_channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
-    int bufsize = av_samples_get_buffer_size(NULL, nb_channels,
-                                             discard_output_nb_samples,
-                                             RAWMEDIA_AUDIO_SAMPLE_FMT, 1);
-    uint8_t buf[bufsize];
-    uint8_t *output[] = { buf };
-
-    const uint8_t** input = (const uint8_t**)rmd->audio.avframe->data;
-    int input_nb_samples = rmd->audio.avframe->nb_samples;
-
-    // Resampler will buffer unused input samples if needed.
-    while ((r = swr_convert(rmd->audio.swr_ctx,
-                            output, discard_output_nb_samples,
-                            input, input_nb_samples)) > 0) {
-        input = NULL;
-        input_nb_samples = 0;
-        discard_output_nb_samples -= r;
-    }
+    // Filter audio then set samples consumed so we skip the
+    // samples being discarded
+    if ((r = filter_audio(rmd)) < 0)
+        return r;
+    rmd->audio.nb_samples_consumed = discard_output_nb_samples;
 
     return r;
 }
 
-// Resample input, can be NULL/0 to drain resampler buffer.
-// output/output_nb_samples will be updated.
-static int resample_audio(RawMediaDecoder* rmd, uint8_t **output, int* output_nb_samples, const uint8_t **input, int input_nb_samples) {
-    int r = 0;
+// Copies as much audio from samplesref into output as will fit.
+// Updates output and output_nb_samples.
+// Destroys samplesref if fully consumed.
+static void copy_audio(RawMediaDecoder* rmd, uint8_t** output, int* output_nb_samples) {
+    struct RawMediaAudio* audio = &rmd->audio;
+    if (!audio->samplesref)
+        return;
+    int nb_samples = FFMIN(*output_nb_samples,
+                           audio->samplesref->audio->nb_samples
+                           - audio->nb_samples_consumed);
     int bytes_per_sample = av_get_bytes_per_sample(RAWMEDIA_AUDIO_SAMPLE_FMT)
         * av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
+    int nb_bytes = nb_samples * bytes_per_sample;
+    uint8_t* input = audio->samplesref->data[0]
+        + (audio->nb_samples_consumed * bytes_per_sample);
 
-    uint8_t *outbuf[] = { *output };
+    memcpy(*output, input, nb_bytes);
 
-    while (*output_nb_samples > 0
-           && (r = swr_convert(rmd->audio.swr_ctx, outbuf, *output_nb_samples,
-                               input, input_nb_samples)) > 0) {
-        input = NULL;
-        input_nb_samples = 0;
-        *output += r * bytes_per_sample;
-        outbuf[0] = *output;
-        *output_nb_samples -= r;
+    *output_nb_samples -= nb_samples;
+    *output += nb_bytes;
+    audio->nb_samples_consumed += nb_samples;
+
+    // Fully consumed samplesref
+    if (audio->nb_samples_consumed >= audio->samplesref->audio->nb_samples) {
+        avfilter_unref_bufferp(&audio->samplesref);
+        audio->nb_samples_consumed = 0;
     }
-    return r;
 }
 
 // Return <0 on error.
 // Decodes silent output after EOF.
 int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output) {
     int r = 0;
-    int output_nb_samples = rmd->audio.output_samples_per_frame;
+    struct RawMediaAudio* audio = &rmd->audio;
+    int output_nb_samples = audio->output_samples_per_frame;
 
-    // Drain resampler buffer
-    if ((r = resample_audio(rmd, &output, &output_nb_samples, NULL, 0)) < 0)
-        return r;
+    // Copy any remaining samples in samplesref
+    if (audio->samplesref)
+        copy_audio(rmd, &output, &output_nb_samples);
 
     if (rmd->audio.status != SS_EOF) {
+        // Decode, filter and copy until output full, or nothing to decode (EOF)
         while (output_nb_samples > 0 && (r = decode_audio_frame(rmd)) > 0) {
-            const uint8_t** input = (const uint8_t**)rmd->audio.avframe->data;
-            int input_nb_samples = rmd->audio.avframe->nb_samples;
-
-            if ((r = resample_audio(rmd, &output, &output_nb_samples,
-                                    input, input_nb_samples)) < 0)
+            if ((r = filter_audio(rmd)) < 0)
                 return r;
+            copy_audio(rmd, &output, &output_nb_samples);
         }
     }
 

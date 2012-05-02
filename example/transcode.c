@@ -22,6 +22,7 @@ int main(int argc, const char *argv[]) {
                                       .framerate_den = FRAME_RATE_DEN,
                                       .width = WIDTH,
                                       .height = HEIGHT,
+                                      .volume = 1,
                                       .start_frame = START_FRAME };
     RawMediaDecoder* rmd = rawmedia_create_decoder(filename, &dconfig);
     if (!rmd)

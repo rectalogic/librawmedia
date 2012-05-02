@@ -18,6 +18,10 @@ typedef struct RawMediaDecoderConfig {
     int width;
     int height;
 
+    // Linear 0..1. Caller should convert from exponential.
+    // See http://www.dr-lex.be/info-stuff/volumecontrols.html
+    float volume;
+
     bool discard_video;
     bool discard_audio;
 } RawMediaDecoderConfig;
