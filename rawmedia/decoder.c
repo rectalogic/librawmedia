@@ -69,7 +69,7 @@ static int open_decoder(AVCodecContext* ctx, AVCodec* codec) {
     return r;
 }
 
-static int init_video_filters(RawMediaDecoder* rmd, const RawMediaDecoderConfig* config) {
+static int init_video_filters(RawMediaDecoder* rmd, const RawMediaSession* session, const RawMediaDecoderConfig* config) {
     int r = 0;
     char args[512];
     AVStream* stream = get_avstream(rmd, rmd->video.stream_index);
@@ -136,7 +136,7 @@ static int init_video_filters(RawMediaDecoder* rmd, const RawMediaDecoderConfig*
     snprintf(args, sizeof(args),
              "scale=trunc(st(0\\,iw*sar)*min(1\\,min(%1$d/ld(0)\\,%2$d/ih))+0.5):ow/dar+0.5,"
              "pad=max(%1$d\\,iw):max(%2$d\\,ih):max(0\\,(ow-iw)/2):max(0\\,(oh-ih)/2)",
-             config->width, config->height);
+             session->width, session->height);
     if ((r = avfilter_graph_parse(rmd->video.filter_graph, args,
                                   &inputs, &outputs, NULL)) < 0)
         goto error;
@@ -308,32 +308,18 @@ static int init_decoder_info(RawMediaDecoder* rmd, const RawMediaDecoderConfig* 
                                                   config->start_frame);
         if (info->duration < duration)
             info->duration = duration;
-
-        int nb_channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
-        int size = av_samples_get_buffer_size(NULL, nb_channels,
-                                              rmd->audio.output_samples_per_frame,
-                                              RAWMEDIA_AUDIO_SAMPLE_FMT, 1);
-        if (size <= 0)
-            return -1;
-        info->audio_framebuffer_size = size;
     }
     return 0;
 }
 
-RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDecoderConfig* config) {
-    if (config->framerate_den <= 0 || config->framerate_num <= 0
-        || config->width <= 0 || config->height <= 0) {
-        av_log(NULL, AV_LOG_FATAL,
-               "%s: invalid size/framerate requested\n", filename);
-        return NULL;
-    }
+RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaSession* session, const RawMediaDecoderConfig* config) {
     int r = 0;
     RawMediaDecoder* rmd = av_mallocz(sizeof(RawMediaDecoder));
     AVFormatContext* format_ctx = NULL;
     if (!rmd)
         return NULL;
 
-    rmd->time_base = (AVRational){config->framerate_den, config->framerate_num};
+    rmd->time_base = (AVRational){session->framerate_den, session->framerate_num};
 
     if ((r = avformat_open_input(&format_ctx, filename, NULL, NULL)) != 0) {
         av_log(NULL, AV_LOG_FATAL,
@@ -365,7 +351,7 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaDec
             rmd->video.frame_duration = av_rescale_q(1, rmd->time_base,
                                                      stream->time_base);
             rmd->video.current_frame = config->start_frame;
-            if ((r = init_video_filters(rmd, config)) < 0)
+            if ((r = init_video_filters(rmd, session, config)) < 0)
                 goto error;
         }
         else if (r == AVERROR_STREAM_NOT_FOUND
