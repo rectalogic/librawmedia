@@ -57,7 +57,7 @@ module RawMedia
     end
 
     def create_audio_buffer
-      FFI::MemoryPointer.new(:uint8, @audio_framebuffer_size)
+      FFI::Buffer.new_out(@audio_framebuffer_size)
     end
 
     # Return Pointer and linesize of internal video buffer.
@@ -89,7 +89,7 @@ module RawMedia
     end
 
     def destroy
-      @decoder.pointer.free
+      @decoder.free
     end
   end
 
@@ -113,7 +113,7 @@ module RawMedia
     end
 
     def destroy
-      @encoder.pointer.free
+      @encoder.free
     end
   end
 
@@ -125,11 +125,11 @@ module RawMedia
     attach_function :rawmedia_create_decoder, [:string, :pointer, :pointer], :pointer
     attach_function :rawmedia_get_decoder_info, [:pointer], :pointer
     attach_function :rawmedia_decode_video, [:pointer, :pointer, :pointer], :int
-    attach_function :rawmedia_decode_audio, [:pointer, :pointer], :int
+    attach_function :rawmedia_decode_audio, [:pointer, :buffer_out], :int
     attach_function :rawmedia_destroy_decoder, [:pointer], :void
     attach_function :rawmedia_create_encoder, [:string, :pointer, :pointer], :pointer
     attach_function :rawmedia_encode_video, [:pointer, :pointer, :int], :int
-    attach_function :rawmedia_encode_audio, [:pointer, :pointer], :int
+    attach_function :rawmedia_encode_audio, [:pointer, :buffer_in], :int
     attach_function :rawmedia_destroy_encoder, [:pointer], :void
     
 
@@ -140,8 +140,7 @@ module RawMedia
              :height, :int,
              :audio_framebuffer_size, :int
     end
-    class RawMediaDecoder < FFI::ManagedStruct
-      layout :p, :pointer
+    class RawMediaDecoder < FFI::AutoPointer
       def self.release(ptr)
         Internal::rawmedia_destroy_decoder(ptr)
       end
@@ -157,8 +156,7 @@ module RawMedia
              :has_video, :bool,
              :has_audio, :bool
     end
-    class RawMediaEncoder < FFI::ManagedStruct
-      layout :p, :pointer
+    class RawMediaEncoder < FFI::AutoPointer
       def self.release(ptr)
         Internal::rawmedia_destroy_encoder(ptr)
       end
