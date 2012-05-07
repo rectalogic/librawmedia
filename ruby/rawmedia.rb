@@ -5,12 +5,10 @@ require 'rational'
 module RawMedia
   class RawMediaError < StandardError; end
 
-#XXX memBuf = FFI::MemoryPointer.new(:char, data.size)
-#XXX :buffer_in/out for function args
-#XXX FFI::Buffer
-
   class Session
     attr_reader :session
+    attr_reader :width
+    attr_reader :height
     def initialize(width, height, framerate=Rational(30))
       @session = Internal::RawMediaSession.new
       @session[:framerate_num] = framerate.numerator
@@ -18,6 +16,8 @@ module RawMedia
       @session[:width] = width
       @session[:height] = height
       Internal::check Internal::rawmedia_init_session(@session)
+      @width = width
+      @height = height
     end
     def audio_framebuffer_size
       @session[:audio_framebuffer_size]
@@ -50,6 +50,7 @@ module RawMedia
       info = Internal::rawmedia_get_decoder_info(@decoder)
       @info = Internal::RawMediaDecoderInfo.new(info)
       @audio_framebuffer_size = session.audio_framebuffer_size
+      @height = session.height
 
       # Pointers for decode_video
       @linesize_ptr = FFI::MemoryPointer.new :int
@@ -58,6 +59,13 @@ module RawMedia
 
     def create_audio_buffer
       FFI::Buffer.new_out(@audio_framebuffer_size)
+    end
+
+    # Wrap buffer FFI::Pointer in a Java ByteBuffer
+    def wrap_video_buffer(buffer, linesize)
+      org.jruby.ext.ffi.Factory.getInstance().
+        wrapDirectMemory(JRuby.runtime, buffer.address).
+        slice(0, @height * linesize).asByteBuffer()
     end
 
     # Return Pointer and linesize of internal video buffer.
