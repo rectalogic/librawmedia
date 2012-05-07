@@ -421,20 +421,24 @@ error:
     return NULL;
 }
 
-void rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
+int rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
+    int r = 0;
     if (rmd) {
         if (rmd->format_ctx) {
+            int rc;
             if (rmd->video.stream_index != INVALID_STREAM) {
                 avfilter_unref_buffer(rmd->video.picref);
                 avfilter_graph_free(&rmd->video.filter_graph);
-                avcodec_close(get_avstream(rmd, rmd->video.stream_index)->codec);
+                rc = avcodec_close(get_avstream(rmd, rmd->video.stream_index)->codec);
+                r = r || rc;
                 packet_queue_flush(&rmd->video.packetq);
                 av_free(rmd->video.avframe);
             }
             if (rmd->audio.stream_index != INVALID_STREAM) {
                 avfilter_unref_buffer(rmd->audio.samplesref);
                 avfilter_graph_free(&rmd->audio.filter_graph);
-                avcodec_close(get_avstream(rmd, rmd->audio.stream_index)->codec);
+                rc = avcodec_close(get_avstream(rmd, rmd->audio.stream_index)->codec);
+                r = r || rc;
                 packet_queue_flush(&rmd->audio.packetq);
                 av_free(rmd->audio.avframe);
                 // Don't free audio.pkt_partial, it's a copy of audio.pkt
@@ -445,6 +449,7 @@ void rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
         }
         av_free(rmd);
     }
+    return r;
 }
 
 const RawMediaDecoderInfo* rawmedia_get_decoder_info(const RawMediaDecoder* rmd) {

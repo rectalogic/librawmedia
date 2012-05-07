@@ -134,29 +134,37 @@ error:
     return NULL;
 }
 
-void rawmedia_destroy_encoder(RawMediaEncoder* rme) {
+int rawmedia_destroy_encoder(RawMediaEncoder* rme) {
+    int r = 0;
     if (rme) {
+        int rc;
         AVFormatContext* format_ctx = rme->format_ctx;
         if (format_ctx) {
-            av_write_trailer(format_ctx);
+            rc = av_write_trailer(format_ctx);
+            r = r || rc;
 
             // Close codecs
             if (rme->video.avstream) {
-                avcodec_close(rme->video.avstream->codec);
+                rc = avcodec_close(rme->video.avstream->codec);
+                r = r || rc;
                 av_free(rme->video.avframe);
             }
             if (rme->audio.avstream) {
-                avcodec_close(rme->audio.avstream->codec);
+                rc = avcodec_close(rme->audio.avstream->codec);
+                r = r || rc;
                 av_free(rme->audio.avframe);
             }
             // Close output file
-            if (!(format_ctx->flags & AVFMT_NOFILE) && format_ctx->pb)
-                avio_close(format_ctx->pb);
+            if (!(format_ctx->flags & AVFMT_NOFILE) && format_ctx->pb) {
+                rc = avio_close(format_ctx->pb);
+                r = r || rc;
+            }
 
             avformat_free_context(format_ctx);
         }
         av_free(rme);
     }
+    return r;
 }
 
 // input must be in RAWMEDIA_VIDEO_PIXEL_FORMAT

@@ -59,12 +59,12 @@ RAWMEDIA_EXPORT const RawMediaDecoderInfo* rawmedia_get_decoder_info(const RawMe
 RAWMEDIA_EXPORT int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* linesize);
 // output must be the size indicated in RawMediaSession
 RAWMEDIA_EXPORT int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output);
-RAWMEDIA_EXPORT void rawmedia_destroy_decoder(RawMediaDecoder* rmd);
+RAWMEDIA_EXPORT int rawmedia_destroy_decoder(RawMediaDecoder* rmd);
 
 RAWMEDIA_EXPORT RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaSession* session, const RawMediaEncoderConfig* config);
 RAWMEDIA_EXPORT int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input, int linesize);
 // input must be the size indicated in RawMediaSession
 RAWMEDIA_EXPORT int rawmedia_encode_audio(RawMediaEncoder* rme, const uint8_t* input);
-RAWMEDIA_EXPORT void rawmedia_destroy_encoder(RawMediaEncoder* rme);
+RAWMEDIA_EXPORT int rawmedia_destroy_encoder(RawMediaEncoder* rme);
 
 #endif

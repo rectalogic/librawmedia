@@ -60,7 +60,7 @@ _librawmedia.rawmedia_decode_audio.argtypes = [c.POINTER(_RawMediaDecoder),
 _librawmedia.rawmedia_decode_audio.restype = _errcheck
 
 _librawmedia.rawmedia_destroy_decoder.argtypes = [c.POINTER(_RawMediaDecoder)]
-_librawmedia.rawmedia_destroy_decoder.restype = None
+_librawmedia.rawmedia_destroy_decoder.restype = c.c_int
 
 _librawmedia.rawmedia_create_encoder.argtypes = [c.c_char_p,
                                                  c.POINTER(_RawMediaSession),
@@ -77,7 +77,7 @@ _librawmedia.rawmedia_encode_audio.argtypes = [c.POINTER(_RawMediaEncoder),
 _librawmedia.rawmedia_encode_audio.restype = _errcheck
 
 _librawmedia.rawmedia_destroy_encoder.argtypes = [c.POINTER(_RawMediaEncoder)]
-_librawmedia.rawmedia_destroy_encoder.restype = None
+_librawmedia.rawmedia_destroy_encoder.restype = c.c_int
 
 class Session:
     def __init__(self, width, height, framerate=Fraction(30)):

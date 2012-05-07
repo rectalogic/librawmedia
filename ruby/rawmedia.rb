@@ -89,7 +89,8 @@ module RawMedia
     end
 
     def destroy
-      @decoder.free
+      @decoder.autorelease = false
+      Internal::check Internal::rawmedia_destroy_decoder(@decoder)
     end
   end
 
@@ -113,7 +114,8 @@ module RawMedia
     end
 
     def destroy
-      @encoder.free
+      @encoder.autorelease = false
+      Internal::check Internal::rawmedia_destroy_encoder(@encoder)
     end
   end
 
@@ -126,11 +128,11 @@ module RawMedia
     attach_function :rawmedia_get_decoder_info, [:pointer], :pointer
     attach_function :rawmedia_decode_video, [:pointer, :pointer, :pointer], :int
     attach_function :rawmedia_decode_audio, [:pointer, :buffer_out], :int
-    attach_function :rawmedia_destroy_decoder, [:pointer], :void
+    attach_function :rawmedia_destroy_decoder, [:pointer], :int
     attach_function :rawmedia_create_encoder, [:string, :pointer, :pointer], :pointer
     attach_function :rawmedia_encode_video, [:pointer, :pointer, :int], :int
     attach_function :rawmedia_encode_audio, [:pointer, :buffer_in], :int
-    attach_function :rawmedia_destroy_encoder, [:pointer], :void
+    attach_function :rawmedia_destroy_encoder, [:pointer], :int
     
 
     class RawMediaSession < FFI::Struct
