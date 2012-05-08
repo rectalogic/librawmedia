@@ -3,10 +3,12 @@
 #include <libavformat/avformat.h>
 #include <libavfilter/avfilter.h>
 
-int rawmedia_init_session(RawMediaSession* session) {
+void rawmedia_init() {
     av_register_all();
     avfilter_register_all();
+}
 
+int rawmedia_init_session(RawMediaSession* session) {
     if (session->framerate_den <= 0 || session->framerate_num <= 0
         || session->width <= 0 || session->height <= 0
         || session->width % 2) {

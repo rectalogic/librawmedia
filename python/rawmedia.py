@@ -39,6 +39,9 @@ def _errcheck(result):
 #XXX dylib for mac, so for linux
 _librawmedia = c.cdll.LoadLibrary("librawmedia.dylib")
 
+_librawmedia.rawmedia_init.argtypes = []
+_librawmedia.rawmedia_init.restype = None
+
 _librawmedia.rawmedia_init_session.argtypes = [c.POINTER(_RawMediaSession)]
 _librawmedia.rawmedia_init_session.restype = _errcheck
 
@@ -78,6 +81,8 @@ _librawmedia.rawmedia_encode_audio.restype = _errcheck
 
 _librawmedia.rawmedia_destroy_encoder.argtypes = [c.POINTER(_RawMediaEncoder)]
 _librawmedia.rawmedia_destroy_encoder.restype = c.c_int
+
+_librawmedia.rawmedia_init()
 
 class Session:
     def __init__(self, width, height, framerate=Fraction(30)):

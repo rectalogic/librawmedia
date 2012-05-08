@@ -131,6 +131,7 @@ module RawMedia
     extend FFI::Library
     ffi_lib 'rawmedia'
 
+    attach_function :rawmedia_init, [], :void
     attach_function :rawmedia_init_session, [:pointer], :int
     attach_function :rawmedia_create_decoder, [:string, :pointer, :pointer], :pointer
     attach_function :rawmedia_get_decoder_info, [:pointer], :pointer
@@ -179,5 +180,7 @@ module RawMedia
     def self.check(result)
       raise RawMediaError if result < 0
     end
+
+    rawmedia_init()
   end
 end
