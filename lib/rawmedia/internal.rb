@@ -4,6 +4,8 @@ module RawMedia
     ffi_lib File.expand_path("../../#{FFI::Platform::LIBPREFIX}rawmedia.#{FFI::Platform::LIBSUFFIX}", __FILE__)
 
     attach_function :rawmedia_init, [], :void
+    callback :log_callback, [:string], :void
+    attach_function :rawmedia_set_log, [:int, :log_callback], :void
     attach_function :rawmedia_init_session, [:pointer], :int
     attach_function :rawmedia_create_decoder, [:string, :pointer, :pointer], :pointer
     attach_function :rawmedia_get_decoder_info, [:pointer], :pointer

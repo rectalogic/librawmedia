@@ -1,4 +1,9 @@
-require 'rawmedia'
+require_relative '../lib/rawmedia'
+
+log = Proc.new do |msg|
+  puts "RUBY #{msg}"
+end
+RawMedia::Log.set_callback(RawMedia::Log::LEVEL_VERBOSE, log)
 
 session = RawMedia::Session.new(320, 240)
 decoder = RawMedia::Decoder.new("/Users/aw/Movies/thehillshaveeyes.mov", session)
