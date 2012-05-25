@@ -19,9 +19,9 @@ add_library(rawmedia SHARED
 target_link_libraries(rawmedia ${FFMPEG_LIBRARIES})
 target_link_libraries(rawmedia LINK_INTERFACE_LIBRARIES "")
 
-install(FILES rawmedia.h DESTINATION include)
+install(FILES rawmedia.h DESTINATION include COMPONENT headers)
 install(TARGETS rawmedia
-  RUNTIME DESTINATION bin
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin COMPONENT libraries
+  LIBRARY DESTINATION lib COMPONENT libraries
+  ARCHIVE DESTINATION lib COMPONENT libraries
 )

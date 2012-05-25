@@ -1,7 +1,7 @@
 module RawMedia
   module Internal
     extend FFI::Library
-    ffi_lib 'rawmedia'
+    ffi_lib File.expand_path("../../#{FFI::Platform::LIBPREFIX}rawmedia.#{FFI::Platform::LIBSUFFIX}", __FILE__)
 
     attach_function :rawmedia_init, [], :void
     attach_function :rawmedia_init_session, [:pointer], :int

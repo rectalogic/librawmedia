@@ -6,6 +6,7 @@ end
 require 'ffi'
 require 'rational'
 
+require 'rawmedia/version'
 require 'rawmedia/errors'
 require 'rawmedia/internal'
 require 'rawmedia/session'
