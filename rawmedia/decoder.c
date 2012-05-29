@@ -131,12 +131,10 @@ static int init_video_filters(RawMediaDecoder* rmd, const RawMediaSession* sessi
     // We specify both width and height, instead of using "-1" ("keep aspect")
     // because that just sets the aspect ratio and doesn't actually scale
     // the pixels.
-    // After scaling, we center the image in the padded output bounds.
     // %1$d is width, %2$d is height
     snprintf(args, sizeof(args),
-             "scale=trunc(st(0\\,iw*sar)*min(1\\,min(%1$d/ld(0)\\,%2$d/ih))+0.5):ow/dar+0.5,"
-             "pad=max(%1$d\\,iw):max(%2$d\\,ih):max(0\\,(ow-iw)/2):max(0\\,(oh-ih)/2)",
-             session->width, session->height);
+             "scale=trunc(st(0\\,iw*sar)*min(1\\,min(%1$d/ld(0)\\,%2$d/ih))+0.5):ow/dar+0.5",
+             config->max_width, config->max_height);
     if ((r = avfilter_graph_parse(rmd->video.filter_graph, args,
                                   &inputs, &outputs, NULL)) < 0)
         goto error;
@@ -314,6 +312,13 @@ static int init_decoder_info(RawMediaDecoder* rmd, const RawMediaDecoderConfig* 
 
 RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaSession* session, const RawMediaDecoderConfig* config) {
     int r = 0;
+    if (!config->discard_video
+        && (config->max_width <= 0 || config->max_height <= 0
+            || config->max_width % 2)) {
+        av_log(NULL, AV_LOG_FATAL, "Invalid decoder size requested\n");
+        return NULL;
+    }
+
     RawMediaDecoder* rmd = av_mallocz(sizeof(RawMediaDecoder));
     AVFormatContext* format_ctx = NULL;
     if (!rmd)
@@ -582,12 +587,14 @@ static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts) {
 // Returns >0 if frame decoded.
 // Returns 0 if no new frame decoded (EOF)
 // output will be set to point to internal memory valid until the next call
-// linesize will be set to the line stride size of output.
-//   Multiply by height to get total buffer size.
-int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* linesize) {
+// width will be set to actual decoded video width
+// height will be set to actual decoded video height
+// outputsize will be set to the byte length of the output buffer,
+//   line stride can be computed from this (bufsize/height)
+int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* width, int* height, int* outputsize) {
     int r = 0;
     struct RawMediaVideo* video = &rmd->video;
-    *linesize = 0;
+    *width = *height = *outputsize = 0;
     *output = NULL;
 
     if (video->status == SS_EOF) {
@@ -616,7 +623,9 @@ int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* linesize)
 
 done:
     if (video->picref) {
-        *linesize = video->picref->linesize[0];
+        *width = video->picref->video->w;
+        *height = video->picref->video->h;
+        *outputsize = video->picref->linesize[0] * *height;
         *output = video->picref->data[0];
     }
     return r;

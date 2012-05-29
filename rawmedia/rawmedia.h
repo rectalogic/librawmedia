@@ -15,9 +15,6 @@ typedef struct RawMediaSession {
     // Target framerate
     int framerate_num;
     int framerate_den;
-    // Video will be scaled and padded to fit these bounds
-    int width;
-    int height;
 
     // This will be set to required audio buffer size after initialization.
     // This is the number of bytes returned on decode, and expected on encode.
@@ -27,6 +24,10 @@ typedef struct RawMediaSession {
 typedef struct RawMediaDecoder RawMediaDecoder;
 
 typedef struct RawMediaDecoderConfig {
+    // Video will be scaled to fit within these bounds
+    int max_width;
+    int max_height;
+
     int start_frame;
 
     // Linear 0..1. Caller should convert from exponential.
@@ -47,6 +48,8 @@ typedef struct RawMediaDecoderInfo {
 typedef struct RawMediaEncoder RawMediaEncoder;
 
 typedef struct RawMediaEncoderConfig {
+    int width;
+    int height;
     bool has_video;
     bool has_audio;
 } RawMediaEncoderConfig;
@@ -58,13 +61,13 @@ RAWMEDIA_EXPORT int rawmedia_init_session(RawMediaSession* session);
 
 RAWMEDIA_EXPORT RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaSession* session, const RawMediaDecoderConfig* config);
 RAWMEDIA_EXPORT const RawMediaDecoderInfo* rawmedia_get_decoder_info(const RawMediaDecoder* rmd);
-RAWMEDIA_EXPORT int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* linesize);
+RAWMEDIA_EXPORT int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* width, int* height, int* outputsize);
 // output must be the size indicated in RawMediaSession
 RAWMEDIA_EXPORT int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output);
 RAWMEDIA_EXPORT int rawmedia_destroy_decoder(RawMediaDecoder* rmd);
 
 RAWMEDIA_EXPORT RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaSession* session, const RawMediaEncoderConfig* config);
-RAWMEDIA_EXPORT int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input, int linesize);
+RAWMEDIA_EXPORT int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input, int inputsize);
 // input must be the size indicated in RawMediaSession
 RAWMEDIA_EXPORT int rawmedia_encode_audio(RawMediaEncoder* rme, const uint8_t* input);
 RAWMEDIA_EXPORT int rawmedia_destroy_encoder(RawMediaEncoder* rme);

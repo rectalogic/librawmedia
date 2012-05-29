@@ -9,7 +9,7 @@ module RawMedia
     attach_function :rawmedia_init_session, [:pointer], :int
     attach_function :rawmedia_create_decoder, [:string, :pointer, :pointer], :pointer
     attach_function :rawmedia_get_decoder_info, [:pointer], :pointer
-    attach_function :rawmedia_decode_video, [:pointer, :pointer, :pointer], :int
+    attach_function :rawmedia_decode_video, [:pointer, :pointer, :pointer, :pointer, :pointer], :int
     attach_function :rawmedia_decode_audio, [:pointer, :buffer_out], :int
     attach_function :rawmedia_destroy_decoder, [:pointer], :int
     attach_function :rawmedia_create_encoder, [:string, :pointer, :pointer], :pointer
@@ -21,8 +21,6 @@ module RawMedia
     class RawMediaSession < FFI::Struct
       layout :framerate_num, :int,
              :framerate_den, :int,
-             :width, :int,
-             :height, :int,
              :audio_framebuffer_size, :int
     end
     class RawMediaDecoder < FFI::AutoPointer
@@ -31,7 +29,9 @@ module RawMedia
       end
     end
     class RawMediaDecoderConfig < FFI::Struct
-      layout :start_frame, :int,
+      layout :max_width, :int,
+             :max_height, :int,
+             :start_frame, :int,
              :volume, :float,
              :discard_video, :bool,
              :discard_audio, :bool
@@ -47,7 +47,9 @@ module RawMedia
       end
     end
     class RawMediaEncoderConfig < FFI::Struct
-      layout :has_video, :bool,
+      layout :width, :int,
+             :height, :int,
+             :has_video, :bool,
              :has_audio, :bool
     end
 

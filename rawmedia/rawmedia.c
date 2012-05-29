@@ -11,10 +11,8 @@ void rawmedia_init() {
 }
 
 int rawmedia_init_session(RawMediaSession* session) {
-    if (session->framerate_den <= 0 || session->framerate_num <= 0
-        || session->width <= 0 || session->height <= 0
-        || session->width % 2) {
-        av_log(NULL, AV_LOG_FATAL, "Invalid size/framerate requested\n");
+    if (session->framerate_den <= 0 || session->framerate_num <= 0) {
+        av_log(NULL, AV_LOG_FATAL, "Invalid framerate requested\n");
         return -1;
     }
 
