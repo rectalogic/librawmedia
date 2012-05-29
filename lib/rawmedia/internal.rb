@@ -55,6 +55,7 @@ module RawMedia
 
     def self.check(result)
       raise RawMediaError if result < 0
+      result
     end
 
     rawmedia_init()

@@ -8,7 +8,7 @@ module RawMedia
     # @option opts [Boolean] :discard_video Ignore video if True
     # @option opts [Boolean] :discard_audio Ignore audio if True
     def initialize(filename, session, max_width, max_height, opts={})
-      volume = opts[:volume] || 1.0
+      volume = opts.fetch(:volume, 1.0)
       # Use an exponential curve for volume
       # See http://www.dr-lex.be/info-stuff/volumecontrols.html
       if volume > 0 and volume < 1
@@ -18,13 +18,13 @@ module RawMedia
       config = Internal::RawMediaDecoderConfig.new
       config[:max_width] = max_width
       config[:max_height] = max_height
-      config[:start_frame] = opts[:start_frame] || 0
+      config[:start_frame] = opts.fetch(:start_frame, 0)
       config[:volume] = volume
       config[:discard_video] = opts[:discard_video]
       config[:discard_audio] = opts[:discard_audio]
       decoder = Internal::rawmedia_create_decoder(filename, session.session, config)
       raise(RawMediaError, "Failed to create Decoder for #{filename}") unless decoder
-      # Wrap in ManagedStruct to manage lifetime
+      # Wrap in AutoPointer to manage lifetime
       @decoder = Internal::RawMediaDecoder.new(decoder)
       info = Internal::rawmedia_get_decoder_info(@decoder)
       @info = Internal::RawMediaDecoderInfo.new(info)
@@ -63,6 +63,7 @@ module RawMedia
     # Decode a frame of video.
     # After decoding, #width, #height, #buffer and #buffer_size will all be
     # valid until the next call to decode_video.
+    # @return [Fixnum] 0 if no new frame decoded, > 0 if frame decoded
     def decode_video
       Internal::check Internal::rawmedia_decode_video(@decoder,
                                                       @video_buffer_ptr,
@@ -92,6 +93,7 @@ module RawMedia
     def destroy
       @decoder.autorelease = false
       Internal::check Internal::rawmedia_destroy_decoder(@decoder)
+      @decoder = nil
     end
   end
 end

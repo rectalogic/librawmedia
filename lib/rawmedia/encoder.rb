@@ -8,7 +8,7 @@ module RawMedia
       config[:has_audio] = has_audio
       encoder = Internal::rawmedia_create_encoder(filename, session.session, config)
       raise(RawMediaError, "Failed to create Encoder for #{filename}") unless encoder
-      # Wrap in ManagedStruct to manage lifetime
+      # Wrap in AutoPointer to manage lifetime
       @encoder = Internal::RawMediaEncoder.new(encoder)
     end
 
@@ -23,6 +23,7 @@ module RawMedia
     def destroy
       @encoder.autorelease = false
       Internal::check Internal::rawmedia_destroy_encoder(@encoder)
+      @encoder = nil
     end
   end
 end
