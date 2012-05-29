@@ -20,12 +20,12 @@ int main(int argc, const char *argv[]) {
     RawMediaSession session = {
         .framerate_num = FRAME_RATE_NUM,
         .framerate_den = FRAME_RATE_DEN,
-        .width = WIDTH,
-        .height = HEIGHT,
     };
     if (rawmedia_init_session(&session) < 0)
         return -1;
-    RawMediaDecoderConfig dconfig = { .volume = 1,
+    RawMediaDecoderConfig dconfig = { .max_width = WIDTH,
+                                      .max_height = HEIGHT,
+                                      .volume = 1,
                                       .start_frame = START_FRAME };
     RawMediaDecoder* rmd = rawmedia_create_decoder(filename, &session, &dconfig);
     if (!rmd)
@@ -43,15 +43,13 @@ int main(int argc, const char *argv[]) {
 
     RawMediaEncoderConfig econfig = { .has_video = info->has_video,
                                       .has_audio = info->has_audio };
-    RawMediaEncoder* rme = rawmedia_create_encoder(output_filename, &session, &econfig);
-    if (!rme)
-        return -1;
+    RawMediaEncoder* rme = NULL;
 
     uint8_t *video_buffer = NULL;
-    int linesize = 0;
     uint8_t audio_buffer[session.audio_framebuffer_size];
+    int width, height, video_buffer_size;
     for (int frame = 0; frame < info->duration; frame++) {
-        if (rawmedia_decode_video(rmd, &video_buffer, &linesize) < 0) {
+        if (rawmedia_decode_video(rmd, &video_buffer, &width, &height, &video_buffer_size) < 0) {
             fprintf(stderr, "Failed to decode video.\n");
             return -1;
         }
@@ -59,7 +57,16 @@ int main(int argc, const char *argv[]) {
             fprintf(stderr, "Failed to decode audio.\n");
             return -1;
         }
-        if (rawmedia_encode_video(rme, video_buffer, linesize) < 0) {
+
+        if (!rme) {
+            econfig.width = width;
+            econfig.height = height;
+            rme = rawmedia_create_encoder(output_filename, &session, &econfig);
+            if (!rme)
+                return -1;
+        }
+
+        if (rawmedia_encode_video(rme, video_buffer, video_buffer_size) < 0) {
             fprintf(stderr, "Failed to encode video.\n");
             return -1;
         }
@@ -67,7 +74,7 @@ int main(int argc, const char *argv[]) {
             fprintf(stderr, "Failed to encode audio.\n");
             return -1;
         }
-        if (fwrite(video_buffer, linesize * session.height, 1, video_fp) < 1) {
+        if (fwrite(video_buffer, video_buffer_size, 1, video_fp) < 1) {
             fprintf(stderr, "Failed to write video.\n");
             return -1;
         }

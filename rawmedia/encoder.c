@@ -10,6 +10,7 @@ struct RawMediaEncoder {
     struct RawMediaVideo {
         AVStream* avstream;
         AVFrame* avframe;
+        int min_framebuffer_size;
     } video;
 
     struct RawMediaAudio {
@@ -19,7 +20,7 @@ struct RawMediaEncoder {
     } audio;
 };
 
-static AVStream* add_video_stream(AVFormatContext* format_ctx, const RawMediaSession* session) {
+static AVStream* add_video_stream(AVFormatContext* format_ctx, const RawMediaSession* session, const RawMediaEncoderConfig* config) {
     AVStream* avstream = NULL;
     AVCodec* codec = avcodec_find_encoder(RAWMEDIA_VIDEO_CODEC);
     if (!codec)
@@ -29,8 +30,8 @@ static AVStream* add_video_stream(AVFormatContext* format_ctx, const RawMediaSes
         return NULL;
     AVCodecContext* codec_ctx = avstream->codec;
     codec_ctx->codec_id = RAWMEDIA_VIDEO_CODEC;
-    codec_ctx->width = session->width;
-    codec_ctx->height = session->height;
+    codec_ctx->width = config->width;
+    codec_ctx->height = config->height;
     codec_ctx->time_base.num = session->framerate_den;
     codec_ctx->time_base.den = session->framerate_num;
     codec_ctx->pix_fmt = RAWMEDIA_VIDEO_PIXEL_FORMAT;
@@ -68,8 +69,11 @@ static AVStream* add_audio_stream(AVFormatContext* format_ctx) {
 RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaSession* session, const RawMediaEncoderConfig* config) {
     int r = 0;
     if ((!config->has_video && !config->has_audio)
-        || session->audio_framebuffer_size <= 0)
+        || session->audio_framebuffer_size <= 0
+        || (config->has_video && (config->width <= 0 || config->height <= 0
+                                  || config->width % 2))) {
         return NULL;
+    }
 
     RawMediaEncoder* rme = av_mallocz(sizeof(RawMediaEncoder));
     AVFormatContext* format_ctx = NULL;
@@ -85,7 +89,7 @@ RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaSes
     rme->format_ctx = format_ctx;
 
     if (config->has_video) {
-        rme->video.avstream = add_video_stream(format_ctx, session);
+        rme->video.avstream = add_video_stream(format_ctx, session, config);
         if (!rme->video.avstream) {
             av_log(NULL, AV_LOG_FATAL, "%s: failed to create video stream.\n",
                    filename);
@@ -94,6 +98,11 @@ RawMediaEncoder* rawmedia_create_encoder(const char* filename, const RawMediaSes
         if (!(rme->video.avframe = avcodec_alloc_frame()))
             goto error;
         rme->video.avframe->pts = 0;
+        if ((rme->video.min_framebuffer_size =
+             avpicture_get_size(RAWMEDIA_VIDEO_PIXEL_FORMAT, config->width, config->height)) <= 0) {
+            av_log(NULL, AV_LOG_FATAL, "%s: invalid frame size.\n", filename);
+            goto error;
+        }
     }
 
     if (config->has_audio) {
@@ -168,15 +177,18 @@ int rawmedia_destroy_encoder(RawMediaEncoder* rme) {
 }
 
 // input must be in RAWMEDIA_VIDEO_PIXEL_FORMAT
-// linesize is the stride of each line in input (in bytes)
-int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input, int linesize) {
+// inputsize is the size of input in bytes
+int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input, int inputsize) {
     int r = 0;
     struct RawMediaVideo* video = &rme->video;
     AVCodecContext* codec_ctx = video->avstream->codec;
     AVPacket pkt = {0};
 
+    if (inputsize < video->min_framebuffer_size)
+        return -1;
+
     video->avframe->data[0] = (uint8_t*)input;
-    video->avframe->linesize[0] = linesize;
+    video->avframe->linesize[0] = inputsize / codec_ctx->height;
 
     int got_packet = 0;
     if ((r = avcodec_encode_video2(codec_ctx, &pkt, video->avframe, &got_packet)) < 0)
