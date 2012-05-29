@@ -10,8 +10,13 @@ module RawMedia
       Internal::check Internal::rawmedia_init_session(@session)
       @framerate = framerate
     end
+
     def audio_framebuffer_size
       @session[:audio_framebuffer_size]
+    end
+
+    def create_audio_buffer
+      FFI::Buffer.new_out(audio_framebuffer_size)
     end
   end
 end

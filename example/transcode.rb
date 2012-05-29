@@ -8,7 +8,7 @@ RawMedia::Log.set_callback(RawMedia::Log::LEVEL_VERBOSE, log)
 session = RawMedia::Session.new
 decoder = RawMedia::Decoder.new("/Users/aw/Movies/thehillshaveeyes.mov", session, 320, 240)
 encoder = nil
-abuf = decoder.create_audio_buffer
+abuf = session.create_audio_buffer
 
 200.times do
   decoder.decode_audio(abuf)

@@ -28,17 +28,12 @@ module RawMedia
       @decoder = Internal::RawMediaDecoder.new(decoder)
       info = Internal::rawmedia_get_decoder_info(@decoder)
       @info = Internal::RawMediaDecoderInfo.new(info)
-      @audio_framebuffer_size = session.audio_framebuffer_size
 
       # Pointers for decode_video
       @video_buffer_ptr = FFI::MemoryPointer.new :pointer
       @width_ptr = FFI::MemoryPointer.new :int
       @height_ptr = FFI::MemoryPointer.new :int
       @video_buffer_size_ptr = FFI::MemoryPointer.new :int
-    end
-
-    def create_audio_buffer
-      FFI::Buffer.new_out(@audio_framebuffer_size)
     end
 
     def width
@@ -77,8 +72,7 @@ module RawMedia
     end
 
     # Decodes audio into the provided buffer.
-    # Buffer must be of size Session::audio_framebuffer_size,
-    # use create_audio_buffer to construct.
+    # @param [FFI::Buffer] buffer a buffer of at least size Session#audio_framebuffer_size
     def decode_audio(buffer)
       Internal::check Internal::rawmedia_decode_audio(@decoder, buffer)
     end
