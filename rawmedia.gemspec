@@ -11,6 +11,10 @@ Gem::Specification.new do |s|
   s.summary     = %q{Audio/video decoding and raw encoding via ffmpeg}
   s.description = s.summary
 
+  s.add_development_dependency 'rspec', '~> 2.10.0'
+  s.add_development_dependency 'simplecov', '~> 0.6.4'
+  s.add_development_dependency 'rake', '~> 0.9.0'
+
   s.files       = `git ls-files`.split("\n")
   s.extensions  = ['ext/rawmedia/extconf.rb']
 
