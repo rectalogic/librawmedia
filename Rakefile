@@ -14,28 +14,33 @@ file libname => Dir.glob("rawmedia/*{.h,.c}") do
   end
 end
 
+fixture_320x240_30fps = 'spec/fixtures/320x240-30fps.mov'
+fixture_320x180_25fps = 'spec/fixtures/320x180-25fps.mov'
+
 desc "Build native library during development"
 task :lib => libname
 
-RSpec::Core::RakeTask.new(:spec)
-task :spec => :lib
+RSpec::Core::RakeTask.new(:spec) do |task|
+  task.rspec_opts = %{--color --format progress}
+end
+task :spec => [:lib, fixture_320x240_30fps, fixture_320x180_25fps]
 
 desc 'Run RSpec code examples with simplecov'
 RSpec::Core::RakeTask.new(:coverage) do |task|
-    task.rcov = true
-    task.rcov_path = 'rspec'
-    task.rcov_opts = '--require simplecov_start'
+  task.rspec_opts = %{--color --format progress}
+  task.rcov = true
+  task.rcov_path = 'rspec'
+  task.rcov_opts = '--require simplecov_start'
 end
-task :coverage => :lib
+task :coverage => [:lib, fixture_320x240_30fps, fixture_320x180_25fps]
 
-fixture_320x240_30fps = 'spec/fixtures/320x240-30fps.mov'
 RawMedia::Rake::FixtureTask.new(fixture_320x240_30fps) do |task|
   task.framerate = '30'
   task.size = '320x240'
 end
-fixture_320x180_25fps = 'spec/fixtures/320x180-25fps.mov'
 RawMedia::Rake::FixtureTask.new(fixture_320x180_25fps) do |task|
   task.framerate = '25'
   task.size = '320x180'
 end
+desc "Generate all media fixtures"
 task :fixtures => [fixture_320x240_30fps, fixture_320x180_25fps]
