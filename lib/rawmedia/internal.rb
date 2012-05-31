@@ -7,14 +7,15 @@ module RawMedia
     callback :log_callback, [:string], :void
     attach_function :rawmedia_set_log, [:int, :log_callback], :void
     attach_function :rawmedia_init_session, [:pointer], :int
+    attach_function :rawmedia_mix_audio, [:pointer, :pointer, :int, :pointer], :void
     attach_function :rawmedia_create_decoder, [:string, :pointer, :pointer], :pointer
     attach_function :rawmedia_get_decoder_info, [:pointer], :pointer
     attach_function :rawmedia_decode_video, [:pointer, :pointer, :pointer, :pointer, :pointer], :int
-    attach_function :rawmedia_decode_audio, [:pointer, :buffer_out], :int
+    attach_function :rawmedia_decode_audio, [:pointer, :pointer], :int
     attach_function :rawmedia_destroy_decoder, [:pointer], :int
     attach_function :rawmedia_create_encoder, [:string, :pointer, :pointer], :pointer
     attach_function :rawmedia_encode_video, [:pointer, :pointer, :int], :int
-    attach_function :rawmedia_encode_audio, [:pointer, :buffer_in], :int
+    attach_function :rawmedia_encode_audio, [:pointer, :pointer], :int
     attach_function :rawmedia_destroy_encoder, [:pointer], :int
     
 

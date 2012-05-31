@@ -58,6 +58,7 @@ typedef struct RawMediaEncoderConfig {
 RAWMEDIA_EXPORT void rawmedia_init();
 RAWMEDIA_EXPORT void rawmedia_set_log(int level, void (*callback)(const char*));
 RAWMEDIA_EXPORT int rawmedia_init_session(RawMediaSession* session);
+RAWMEDIA_EXPORT void rawmedia_mix_audio(const RawMediaSession* session, const uint8_t* const* buffers, int buffer_count, uint8_t* output);
 
 RAWMEDIA_EXPORT RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaSession* session, const RawMediaDecoderConfig* config);
 RAWMEDIA_EXPORT const RawMediaDecoderInfo* rawmedia_get_decoder_info(const RawMediaDecoder* rmd);

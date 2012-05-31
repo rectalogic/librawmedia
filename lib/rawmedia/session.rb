@@ -11,12 +11,20 @@ module RawMedia
       @framerate = framerate
     end
 
+    # @return [Fixnum] required size of audio buffer in bytes
     def audio_framebuffer_size
       @session[:audio_framebuffer_size]
     end
 
     def create_audio_buffer
-      FFI::Buffer.new_out(audio_framebuffer_size)
+      FFI::MemoryPointer.new(audio_framebuffer_size)
+    end
+
+    # @param [Fixnum] buffer_count number of audio buffers the mixer will
+    #  be able to mix
+    # @return [AudioMixer]
+    def create_audio_mixer
+      AudioMixer.new(self)
     end
   end
 end
