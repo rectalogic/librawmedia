@@ -20,8 +20,6 @@ module RawMedia
       FFI::MemoryPointer.new(audio_framebuffer_size)
     end
 
-    # @param [Fixnum] buffer_count number of audio buffers the mixer will
-    #  be able to mix
     # @return [AudioMixer]
     def create_audio_mixer
       AudioMixer.new(self)

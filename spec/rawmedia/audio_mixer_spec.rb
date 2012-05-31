@@ -29,8 +29,7 @@ module RawMedia
       output = session.create_audio_buffer
       mixer.mix(buffers, output)
 
-      int16 = FFI::Pointer.new(:int16, output)
-      int16[0].get_short.should == sample_value * buffer_count
+      output.get_short.should == sample_value * buffer_count
     end
 
     it 'should clamp sample values' do
@@ -44,8 +43,19 @@ module RawMedia
       output = session.create_audio_buffer
       mixer.mix(buffers, output)
 
-      int16 = FFI::Pointer.new(:int16, output)
-      int16[0].get_short.should == 32767
+      output.get_short.should == 32767
+    end
+
+    it 'should handle changing buffer count' do
+      output = session.create_audio_buffer
+
+      buffers = Array.new(2)
+      buffers.fill { session.create_audio_buffer }
+      mixer.mix(buffers, output)
+
+      buffers = Array.new(4)
+      buffers.fill { session.create_audio_buffer }
+      mixer.mix(buffers, output)
     end
   end
 end
