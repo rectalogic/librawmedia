@@ -258,9 +258,9 @@ static int initial_seek(RawMediaDecoder* rmd, int start_frame, const char* filen
     // Skip frames in audio seeking forward
     if (rmd->audio.stream_index != INVALID_STREAM) {
         AVRational audio_time_base = get_avstream(rmd, rmd->audio.stream_index)->time_base;
-        AVRational video_time_base = get_avstream(rmd, rmd->video.stream_index)->time_base;
         int64_t first_audio_sample = 0;
         if (video_pts != -1) {
+            AVRational video_time_base = get_avstream(rmd, rmd->video.stream_index)->time_base;
             first_audio_sample = av_rescale_q(video_pts, video_time_base,
                                               audio_time_base);
         }

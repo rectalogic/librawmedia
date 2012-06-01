@@ -9,7 +9,7 @@ libname = "lib/#{FFI::Platform::LIBPREFIX}rawmedia.#{FFI::Platform::LIBSUFFIX}"
 
 file libname => Dir.glob("rawmedia/*{.h,.c}") do
   Dir.chdir("ext/rawmedia") do
-    ruby "extconf.rb", '-DCMAKE_BUILD_TYPE:STRING=Debug'
+    ruby 'extconf.rb', '--debug'
     sh "make && make install"
   end
 end

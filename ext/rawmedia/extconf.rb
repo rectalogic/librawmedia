@@ -1,8 +1,10 @@
 root = File.expand_path('../../..', __FILE__)
 build = File.expand_path('../build', __FILE__)
 
-unless ARGV.empty?
-  args = ARGV.map {|a| %{"#{a}"} }.join(' ')
+if ARGV.first == '--debug'
+  args = '-DCMAKE_BUILD_TYPE:STRING=Debug'
+else
+  cleanup = %{rm -rf "#{build}"}
 end
 
 File.open('Makefile', 'w') do |f|
@@ -14,6 +16,6 @@ all:
 
 install:
 	cd "#{build}"; cmake -DCOMPONENT=libraries -P cmake_install.cmake
-	rm -rf "#{build}"
+	#{cleanup}
   EOF
 end
