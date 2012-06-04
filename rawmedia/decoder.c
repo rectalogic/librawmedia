@@ -6,7 +6,7 @@
 #include <libavfilter/avfiltergraph.h>
 #include <libavfilter/avcodec.h>
 #include <libavfilter/buffersink.h>
-#include <libavfilter/asrc_abuffer.h>
+#include <libavfilter/buffersrc.h>
 #include <libswscale/swscale.h>
 #include "rawmedia.h"
 #include "rawmedia_internal.h"
@@ -54,7 +54,6 @@ struct RawMediaDecoder {
 };
 
 static int64_t video_expected_pts(RawMediaDecoder* rmd);
-static inline int64_t video_frame_pts(AVFrame* avframe);
 static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts);
 static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample);
 
@@ -86,11 +85,13 @@ static int init_video_filters(RawMediaDecoder* rmd, const RawMediaSession* sessi
         r = -1;
         goto error;
     }
-    snprintf(args, sizeof(args), "%d:%d:%d:%d:%d:%d:%d:%d",
+    AVRational sar = stream->sample_aspect_ratio.num
+        ? stream->sample_aspect_ratio
+        : video_ctx->sample_aspect_ratio;
+    snprintf(args, sizeof(args), "%d:%d:%d:%d:%d:%d:%d:flags=%d",
              video_ctx->width, video_ctx->height, video_ctx->pix_fmt,
              video_ctx->time_base.num, video_ctx->time_base.den,
-             video_ctx->sample_aspect_ratio.num,
-             video_ctx->sample_aspect_ratio.den, SWS_LANCZOS);
+             sar.num, sar.den, SWS_LANCZOS);
     if ((r = avfilter_graph_create_filter(&rmd->video.buffersrc_ctx,
                                           avfilter_get_by_name("buffer"),
                                           "in", args, NULL,
@@ -161,11 +162,6 @@ static int init_audio_filters(RawMediaDecoder* rmd, const RawMediaDecoderConfig*
     AVFilterInOut* inputs = NULL;
     static const enum AVSampleFormat sample_fmts[] = { RAWMEDIA_AUDIO_SAMPLE_FMT,
                                                        AV_SAMPLE_FMT_NONE };
-    int packing_fmts[] =
-        { av_sample_fmt_is_planar(RAWMEDIA_AUDIO_SAMPLE_FMT)
-          ? AVFILTER_PLANAR
-          : AVFILTER_PACKED,
-          -1 };
     static const int64_t chlayouts[] = { RAWMEDIA_AUDIO_CHANNEL_LAYOUT, -1 };
 
     if (!(rmd->audio.filter_graph = avfilter_graph_alloc())) {
@@ -175,10 +171,12 @@ static int init_audio_filters(RawMediaDecoder* rmd, const RawMediaDecoderConfig*
 
     if (!audio_ctx->channel_layout)
         audio_ctx->channel_layout = av_get_default_channel_layout(audio_ctx->channels);
-    snprintf(args, sizeof(args), "%d:%d:0x%"PRIx64":%s",
-             audio_ctx->sample_rate, audio_ctx->sample_fmt,
-             audio_ctx->channel_layout,
-             av_sample_fmt_is_planar(audio_ctx->sample_fmt) ? "planar" : "packed");
+    snprintf(args, sizeof(args),
+             "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=0x%"PRIx64,
+             stream->time_base.num, stream->time_base.den,
+             audio_ctx->sample_rate,
+             av_get_sample_fmt_name(audio_ctx->sample_fmt),
+             audio_ctx->channel_layout);
     if ((r = avfilter_graph_create_filter(&rmd->audio.abuffersrc_ctx,
                                           avfilter_get_by_name("abuffer"),
                                           "in", args, NULL,
@@ -188,7 +186,6 @@ static int init_audio_filters(RawMediaDecoder* rmd, const RawMediaDecoderConfig*
     AVABufferSinkParams *abuffersink_params = av_abuffersink_params_alloc();
     abuffersink_params->sample_fmts = sample_fmts;
     abuffersink_params->channel_layouts = chlayouts;
-    abuffersink_params->packing_fmts = packing_fmts;
     r = avfilter_graph_create_filter(&rmd->audio.abuffersink_ctx,
                                      avfilter_get_by_name("abuffersink"),
                                      "out", NULL, abuffersink_params,
@@ -213,7 +210,7 @@ static int init_audio_filters(RawMediaDecoder* rmd, const RawMediaDecoderConfig*
     inputs->pad_idx = 0;
     inputs->next = NULL;
 
-    int length = snprintf(args, sizeof(args), "aconvert,aresample=%d",
+    int length = snprintf(args, sizeof(args), "aresample=%d,aconvert",
                           RAWMEDIA_AUDIO_SAMPLE_RATE);
     if (config->volume < 1) {
         snprintf(&args[length], sizeof(args) - length, ",volume=%f",
@@ -252,7 +249,7 @@ static int initial_seek(RawMediaDecoder* rmd, int start_frame, const char* filen
         }
         // Save actual pts of frame we used, to compute audio offset below.
         // Subtract start_time for cases where video pts does not start at 0
-        video_pts = video_frame_pts(rmd->video.avframe);
+        video_pts = av_frame_get_best_effort_timestamp(rmd->video.avframe);
         AVStream* stream = get_avstream(rmd, rmd->video.stream_index);
         if (stream->start_time != AV_NOPTS_VALUE)
             video_pts -= stream->start_time;
@@ -536,11 +533,6 @@ static int64_t video_expected_pts(RawMediaDecoder* rmd) {
     return expected_pts;
 }
 
-static inline int64_t video_frame_pts(AVFrame* avframe) {
-    return *(int64_t*)av_opt_ptr(avcodec_get_frame_class(), avframe,
-                                 "best_effort_timestamp");
-}
-
 // Returns 0 if no new frame decoded (EOF), >0 if new frame decoded, <0 on error.
 static int decode_video_frame(RawMediaDecoder* rmd) {
     int r = 0;
@@ -562,7 +554,7 @@ static int decode_video_frame(RawMediaDecoder* rmd) {
 static int filter_video(RawMediaDecoder* rmd) {
     int r = 0;
     struct RawMediaVideo* video = &rmd->video;
-    if ((r = av_vsrc_buffer_add_frame(video->buffersrc_ctx, video->avframe, 0)) < 0)
+    if ((r = av_buffersrc_add_frame(video->buffersrc_ctx, video->avframe, 0)) < 0)
         return r;
     if (avfilter_poll_frame(video->buffersink_ctx->inputs[0])) {
         // Unref previous buffer
@@ -577,7 +569,7 @@ static int filter_video(RawMediaDecoder* rmd) {
 // Returns 0 if no new frame decoded, >0 if new frame decoded, <0 on error.
 static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts) {
     int r = 0;
-    while (expected_pts > video_frame_pts(rmd->video.avframe)) {
+    while (expected_pts > av_frame_get_best_effort_timestamp(rmd->video.avframe)) {
         if ((r = decode_video_frame(rmd)) < 0)
             return r;
         if (rmd->video.status == SS_EOF)
@@ -682,13 +674,7 @@ static int filter_audio(RawMediaDecoder* rmd) {
     int r = 0;
     struct RawMediaAudio* audio = &rmd->audio;
     AVFrame* avframe = audio->avframe;
-    if ((r = av_asrc_buffer_add_samples(audio->abuffersrc_ctx,
-                                        avframe->data, avframe->linesize,
-                                        avframe->nb_samples,
-                                        avframe->sample_rate, avframe->format,
-                                        avframe->channel_layout,
-                                        av_sample_fmt_is_planar(avframe->format),
-                                        avframe->pts, 0)) < 0)
+    if ((r = av_buffersrc_add_frame(audio->abuffersrc_ctx, avframe, 0) < 0))
         return r;
     if (avfilter_poll_frame(audio->abuffersink_ctx->inputs[0])) {
         // Unref previous buffer
