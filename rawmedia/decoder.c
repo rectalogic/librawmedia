@@ -53,10 +53,6 @@ struct RawMediaDecoder {
     RawMediaDecoderInfo info;
 };
 
-static int64_t video_expected_pts(RawMediaDecoder* rmd);
-static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts);
-static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample);
-
 static inline AVStream* get_avstream(const RawMediaDecoder* rmd, int stream_index) {
     return rmd->format_ctx->streams[stream_index];
 }
@@ -230,47 +226,19 @@ error:
     return r;
 }
 
-static int initial_seek(RawMediaDecoder* rmd, int start_frame, const char* filename) {
+static int initial_seek(RawMediaDecoder* rmd, int start_frame) {
     int r = 0;
-    if (start_frame <= 0)
-        return 0;
+    struct RawMediaAudio* audio = &rmd->audio;
+    struct RawMediaVideo* video = &rmd->video;
 
-    int64_t timestamp = av_rescale_q(start_frame, rmd->time_base, AV_TIME_BASE_Q);
-    if (av_seek_frame(rmd->format_ctx, -1, timestamp, AVSEEK_FLAG_BACKWARD) < 0)
-        av_log(NULL, AV_LOG_WARNING, "%s: failed to seek\n", filename);
-
-    int64_t video_pts = -1;
-    // Skip frames in video seeking forward
-    if (rmd->video.stream_index != INVALID_STREAM) {
-        video_pts = video_expected_pts(rmd);
-        if ((r = next_video_frame(rmd, video_pts)) < 0) {
-            av_log(NULL, AV_LOG_FATAL, "%s: failed to seek video\n", filename);
-            return r;
+    for (int i = 0; i < start_frame; i++) {
+        if (video->stream_index != INVALID_STREAM) {
+            if ((r = rawmedia_decode_video(rmd, NULL, NULL, NULL, NULL)) < 0)
+                return r;
         }
-        // Save actual pts of frame we used, to compute audio offset below.
-        // Subtract start_time for cases where video pts does not start at 0
-        video_pts = av_frame_get_best_effort_timestamp(rmd->video.avframe);
-        AVStream* stream = get_avstream(rmd, rmd->video.stream_index);
-        if (stream->start_time != AV_NOPTS_VALUE)
-            video_pts -= stream->start_time;
-    }
-
-    // Skip frames in audio seeking forward
-    if (rmd->audio.stream_index != INVALID_STREAM) {
-        AVRational audio_time_base = get_avstream(rmd, rmd->audio.stream_index)->time_base;
-        int64_t first_audio_sample = 0;
-        if (video_pts != -1) {
-            AVRational video_time_base = get_avstream(rmd, rmd->video.stream_index)->time_base;
-            first_audio_sample = av_rescale_q(video_pts, video_time_base,
-                                              audio_time_base);
-        }
-        else {
-            first_audio_sample = av_rescale_q(start_frame, rmd->time_base,
-                                              audio_time_base);
-        }
-        if ((r = first_audio_frame(rmd, first_audio_sample)) < 0) {
-            av_log(NULL, AV_LOG_FATAL, "%s: failed to seek audio\n", filename);
-            return r;
+        if (audio->stream_index != INVALID_STREAM) {
+            if ((r = rawmedia_decode_audio(rmd, NULL)) < 0)
+                return r;
         }
     }
     return r;
@@ -355,7 +323,6 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaSes
                 goto error;
             rmd->video.frame_duration = av_rescale_q(1, rmd->time_base,
                                                      stream->time_base);
-            rmd->video.current_frame = config->start_frame;
             if ((r = init_video_filters(rmd, session, config)) < 0)
                 goto error;
         }
@@ -413,8 +380,11 @@ RawMediaDecoder* rawmedia_create_decoder(const char* filename, const RawMediaSes
         goto error;
     }
 
-    if ((r = initial_seek(rmd, config->start_frame, filename)) < 0)
+    if ((r = initial_seek(rmd, config->start_frame)) < 0) {
+        av_log(NULL, AV_LOG_FATAL, "%s: initial seek to frame %d failed\n",
+               filename, config->start_frame);
         goto error;
+    }
 
     if ((r = init_decoder_info(rmd, config)) < 0)
         goto error;
@@ -582,6 +552,7 @@ static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts) {
 // Returns >0 if frame decoded.
 // Returns 0 if no new frame decoded (EOF)
 // output will be set to point to internal memory valid until the next call
+//  If output is NULL, other output args are also ignored.
 // width will be set to actual decoded video width
 // height will be set to actual decoded video height
 // outputsize will be set to the byte length of the output buffer,
@@ -589,8 +560,10 @@ static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts) {
 int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* width, int* height, int* outputsize) {
     int r = 0;
     struct RawMediaVideo* video = &rmd->video;
-    *width = *height = *outputsize = 0;
-    *output = NULL;
+    if (output) {
+        *width = *height = *outputsize = 0;
+        *output = NULL;
+    }
 
     if (video->status == SS_EOF) {
         r = 0;
@@ -617,7 +590,7 @@ int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* width, in
         r = 0;
 
 done:
-    if (video->picref) {
+    if (output && video->picref) {
         *width = video->picref->video->w;
         *height = video->picref->video->h;
         *outputsize = video->picref->linesize[0] * *height;
@@ -687,47 +660,10 @@ static int filter_audio(RawMediaDecoder* rmd) {
     return r;
 }
 
-// Discard all input audio samples up until start_sample.
-// start_sample is in source audio timebase
-static int first_audio_frame(RawMediaDecoder* rmd, int64_t start_sample) {
-    int r = 0;
-    AVRational audio_time_base = get_avstream(rmd, rmd->audio.stream_index)->time_base;
-    int64_t samples_per_frame = av_rescale_q(1, rmd->time_base, audio_time_base);
-    int64_t end_sample = start_sample + samples_per_frame - 1;
-    int64_t decoded_start_sample = 0;
-    int64_t decoded_end_sample = 0;
-    for (;;) {
-        if (decoded_start_sample <= end_sample
-            && decoded_end_sample >= start_sample)
-            break;
-        if ((r = decode_audio_frame(rmd)) < 0)
-            return r;
-        decoded_start_sample += rmd->audio.avframe->nb_samples;
-        decoded_end_sample = decoded_start_sample + samples_per_frame - 1;
-        if (rmd->audio.status == SS_EOF)
-            return r;
-    }
-
-    int discard_input_nb_samples = decoded_start_sample - start_sample;
-    if (discard_input_nb_samples <= 0)
-        return r;
-
-    int discard_output_nb_samples =
-        av_rescale_q(discard_input_nb_samples, audio_time_base,
-                     RAWMEDIA_AUDIO_TIME_BASE);
-
-    // Filter audio then set samples consumed so we skip the
-    // samples being discarded
-    if ((r = filter_audio(rmd)) < 0)
-        return r;
-    rmd->audio.nb_samples_consumed = discard_output_nb_samples;
-
-    return r;
-}
-
 // Copies as much audio from samplesref into output as will fit.
 // Updates output and output_nb_samples.
 // Destroys samplesref if fully consumed.
+// *output may be NULL
 static void copy_audio(RawMediaDecoder* rmd, uint8_t** output, int* output_nb_samples) {
     struct RawMediaAudio* audio = &rmd->audio;
     if (!audio->samplesref)
@@ -741,10 +677,12 @@ static void copy_audio(RawMediaDecoder* rmd, uint8_t** output, int* output_nb_sa
     uint8_t* input = audio->samplesref->data[0]
         + (audio->nb_samples_consumed * bytes_per_sample);
 
-    memcpy(*output, input, nb_bytes);
+    if (*output) {
+        memcpy(*output, input, nb_bytes);
+        *output += nb_bytes;
+    }
 
     *output_nb_samples -= nb_samples;
-    *output += nb_bytes;
     audio->nb_samples_consumed += nb_samples;
 
     // Fully consumed samplesref
@@ -756,6 +694,7 @@ static void copy_audio(RawMediaDecoder* rmd, uint8_t** output, int* output_nb_sa
 
 // Return <0 on error.
 // Decodes silent output after EOF.
+// output may be NULL.
 int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output) {
     int r = 0;
     struct RawMediaAudio* audio = &rmd->audio;
@@ -775,7 +714,7 @@ int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output) {
     }
 
     // Pad output with silence
-    if (output_nb_samples > 0) {
+    if (output_nb_samples > 0 && output) {
         int bytes = output_nb_samples
             * av_get_bytes_per_sample(RAWMEDIA_AUDIO_SAMPLE_FMT)
             * av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
