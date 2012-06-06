@@ -7,7 +7,7 @@ Gem::Specification.new do |s|
   s.platform    = Gem::Platform::RUBY
   s.authors     = ["Andrew Wason"]
   s.email       = ["rectalogic@rectalogic.com"]
-  s.homepage    = ""
+  s.homepage    = "https://github.com/rectalogic/librawmedia"
   s.summary     = %q{Audio/video decoding and raw encoding via ffmpeg}
   s.description = s.summary
 

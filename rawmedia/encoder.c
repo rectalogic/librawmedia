@@ -59,6 +59,7 @@ static AVStream* add_audio_stream(AVFormatContext* format_ctx) {
     AVCodecContext* codec_ctx = avstream->codec;
     codec_ctx->sample_fmt = RAWMEDIA_AUDIO_SAMPLE_FMT;
     codec_ctx->sample_rate = RAWMEDIA_AUDIO_SAMPLE_RATE;
+    codec_ctx->channel_layout = RAWMEDIA_AUDIO_CHANNEL_LAYOUT;
     codec_ctx->channels = av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
     if (format_ctx->oformat->flags & AVFMT_GLOBALHEADER)
         codec_ctx->flags |= CODEC_FLAG_GLOBAL_HEADER;
