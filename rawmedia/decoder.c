@@ -671,13 +671,15 @@ static void copy_audio(RawMediaDecoder* rmd, uint8_t** output, int* output_nb_sa
     int nb_samples = FFMIN(*output_nb_samples,
                            audio->samplesref->audio->nb_samples
                            - audio->nb_samples_consumed);
-    int bytes_per_sample = av_get_bytes_per_sample(RAWMEDIA_AUDIO_SAMPLE_FMT)
-        * av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
-    int nb_bytes = nb_samples * bytes_per_sample;
-    uint8_t* input = audio->samplesref->data[0]
-        + (audio->nb_samples_consumed * bytes_per_sample);
 
+    // Could use av_samples_copy
     if (*output) {
+        int bytes_per_sample = av_get_bytes_per_sample(RAWMEDIA_AUDIO_SAMPLE_FMT)
+            * av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
+        int nb_bytes = nb_samples * bytes_per_sample;
+        uint8_t* input = audio->samplesref->data[0]
+            + (audio->nb_samples_consumed * bytes_per_sample);
+
         memcpy(*output, input, nb_bytes);
         *output += nb_bytes;
     }
@@ -715,10 +717,10 @@ int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output) {
 
     // Pad output with silence
     if (output_nb_samples > 0 && output) {
-        int bytes = output_nb_samples
-            * av_get_bytes_per_sample(RAWMEDIA_AUDIO_SAMPLE_FMT)
-            * av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT);
-        memset(output, RAWMEDIA_AUDIO_SILENCE, bytes);
+        uint8_t* data[] = { output };
+        av_samples_set_silence(data, 0, output_nb_samples,
+                               av_get_channel_layout_nb_channels(RAWMEDIA_AUDIO_CHANNEL_LAYOUT),
+                               RAWMEDIA_AUDIO_SAMPLE_FMT);
         return r;
     }
 
