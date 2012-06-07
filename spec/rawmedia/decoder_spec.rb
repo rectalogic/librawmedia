@@ -45,7 +45,20 @@ module RawMedia
       decoder = Decoder.new(filename, session, 300, 300)
       buffer = session.create_audio_buffer
       decoder.decode_audio(buffer)
+      buffer.get_short(5).should == 27905
       decoder.destroy
+    end
+
+    it 'should handle seeking' do
+      decoder = Decoder.new(filename, session, 300, 300)
+      duration = decoder.duration
+      decoder.destroy
+      decoder = Decoder.new(filename, session, 300, 300, start_frame: 30)
+      decoder.duration.should be == (duration - 30)
+
+      buffer = session.create_audio_buffer
+      decoder.decode_audio(buffer)
+      buffer.get_short(5).should == -23291
     end
 
     it 'should be destroyed' do
