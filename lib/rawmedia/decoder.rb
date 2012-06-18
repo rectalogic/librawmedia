@@ -82,15 +82,15 @@ module RawMedia
     end
 
     def duration
-      @info[:duration]
+      @duration ||= @info[:duration]
     end
 
     def has_video?
-      @info[:has_video]
+      @has_video ||= @info[:has_video]
     end
 
     def has_audio?
-      @info[:has_audio]
+      @has_audio ||= @info[:has_audio]
     end
 
     def destroy

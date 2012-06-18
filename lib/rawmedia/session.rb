@@ -16,7 +16,7 @@ module RawMedia
 
     # @return [Fixnum] required size of audio buffer in bytes
     def audio_framebuffer_size
-      @session[:audio_framebuffer_size]
+      @audio_framebuffer_size ||= @session[:audio_framebuffer_size]
     end
 
     def create_audio_buffer
