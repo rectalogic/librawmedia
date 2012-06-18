@@ -11,6 +11,8 @@ A Ruby wrapper built using FFI is included.
 librawmedia is currently a work in progress and incomplete.
 It's main purpose is for use with [RenderMix](https://github.com/rectalogic/rendermix)
 
+Currently working with ffmpeg as of commit f87dacb
+
 ## License
 
 Copyright (c) 2012 Hewlett-Packard Development Company, L.P. All rights reserved.

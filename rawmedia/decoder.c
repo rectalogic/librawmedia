@@ -84,7 +84,11 @@ static int init_video_filters(RawMediaDecoder* rmd, const RawMediaSession* sessi
     AVRational sar = stream->sample_aspect_ratio.num
         ? stream->sample_aspect_ratio
         : video_ctx->sample_aspect_ratio;
-    snprintf(args, sizeof(args), "%d:%d:%d:%d:%d:%d:%d:flags=%d",
+    if (!sar.den)
+        sar = (AVRational){0, 1};
+    snprintf(args, sizeof(args),
+             "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:"
+             "pixel_aspect=%d/%d:sws_param=flags=%d",
              video_ctx->width, video_ctx->height, video_ctx->pix_fmt,
              video_ctx->time_base.num, video_ctx->time_base.den,
              sar.num, sar.den, SWS_LANCZOS);
@@ -526,7 +530,7 @@ static int filter_video(RawMediaDecoder* rmd) {
     struct RawMediaVideo* video = &rmd->video;
     if ((r = av_buffersrc_add_frame(video->buffersrc_ctx, video->avframe, 0)) < 0)
         return r;
-    if (avfilter_poll_frame(video->buffersink_ctx->inputs[0])) {
+    if (av_buffersink_poll_frame(video->buffersink_ctx)) {
         // Unref previous buffer
         avfilter_unref_bufferp(&video->picref);
         if ((r = av_buffersink_get_buffer_ref(video->buffersink_ctx,
@@ -560,6 +564,10 @@ static int next_video_frame(RawMediaDecoder* rmd, int64_t expected_pts) {
 int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* width, int* height, int* outputsize) {
     int r = 0;
     struct RawMediaVideo* video = &rmd->video;
+
+    if (video->stream_index == INVALID_STREAM)
+        return -1;
+
     if (output) {
         *width = *height = *outputsize = 0;
         *output = NULL;
@@ -649,7 +657,7 @@ static int filter_audio(RawMediaDecoder* rmd) {
     AVFrame* avframe = audio->avframe;
     if ((r = av_buffersrc_add_frame(audio->abuffersrc_ctx, avframe, 0) < 0))
         return r;
-    if (avfilter_poll_frame(audio->abuffersink_ctx->inputs[0])) {
+    if (av_buffersink_poll_frame(audio->abuffersink_ctx)) {
         // Unref previous buffer
         avfilter_unref_bufferp(&audio->samplesref);
         if ((r = av_buffersink_get_buffer_ref(audio->abuffersink_ctx,
@@ -701,6 +709,9 @@ int rawmedia_decode_audio(RawMediaDecoder* rmd, uint8_t* output) {
     int r = 0;
     struct RawMediaAudio* audio = &rmd->audio;
     int output_nb_samples = audio->output_samples_per_frame;
+
+    if (audio->stream_index == INVALID_STREAM)
+        return -1;
 
     // Copy any remaining samples in samplesref
     if (audio->samplesref)
