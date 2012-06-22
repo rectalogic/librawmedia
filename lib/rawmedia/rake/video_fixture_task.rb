@@ -7,7 +7,7 @@ require 'rake/tasklib'
 module RawMedia
   module Rake
     # Rake task to generate a raw media file test fixture
-    class FixtureTask < ::Rake::TaskLib
+    class VideoFixtureTask < ::Rake::TaskLib
       #include ::Rake::DSL if defined?(::Rake::DSL)
 
       # @return [String] the output file name, and task name

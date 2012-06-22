@@ -5,7 +5,7 @@ require 'rubygems'
 require 'bundler'
 Bundler::GemHelper.install_tasks
 require 'rspec/core/rake_task'
-require 'rawmedia/rake/fixture_task'
+require 'rawmedia/rake/video_fixture_task'
 require 'ffi'
 
 libname = "lib/#{FFI::Platform::LIBPREFIX}rawmedia.#{FFI::Platform::LIBSUFFIX}"
@@ -37,11 +37,11 @@ RSpec::Core::RakeTask.new(:coverage) do |task|
 end
 task :coverage => [:lib, fixture_320x240_30fps, fixture_320x180_25fps]
 
-RawMedia::Rake::FixtureTask.new(fixture_320x240_30fps) do |task|
+RawMedia::Rake::VideoFixtureTask.new(fixture_320x240_30fps) do |task|
   task.framerate = '30'
   task.size = '320x240'
 end
-RawMedia::Rake::FixtureTask.new(fixture_320x180_25fps) do |task|
+RawMedia::Rake::VideoFixtureTask.new(fixture_320x180_25fps) do |task|
   task.framerate = '25'
   task.size = '320x180'
 end
