@@ -37,13 +37,18 @@ RSpec::Core::RakeTask.new(:coverage) do |task|
 end
 task :coverage => [:lib, fixture_320x240_30fps, fixture_320x180_25fps]
 
+directory 'spec/fixtures'
+
 RawMedia::Rake::VideoFixtureTask.new(fixture_320x240_30fps) do |task|
   task.framerate = '30'
   task.size = '320x240'
 end
+task fixture_320x240_30fps => 'spec/fixtures'
 RawMedia::Rake::VideoFixtureTask.new(fixture_320x180_25fps) do |task|
   task.framerate = '25'
   task.size = '320x180'
 end
+task fixture_320x180_25fps => 'spec/fixtures'
+
 desc "Generate all media fixtures"
 task :fixtures => [fixture_320x240_30fps, fixture_320x180_25fps]
