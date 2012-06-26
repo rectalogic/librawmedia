@@ -98,12 +98,6 @@ static int init_video_filters(RawMediaDecoder* rmd, const RawMediaSession* sessi
                                           rmd->video.filter_graph)) < 0)
         goto error;
 
-#if FF_API_OLD_VSINK_API
-    r = avfilter_graph_create_filter(&rmd->video.buffersink_ctx,
-                                     avfilter_get_by_name("buffersink"),
-                                     "out", NULL, (void*)pixel_fmts,
-                                     rmd->video.filter_graph);
-#else
     AVBufferSinkParams *buffersink_params = av_buffersink_params_alloc();
     buffersink_params->pixel_fmts = pixel_fmts;
     r = avfilter_graph_create_filter(&rmd->video.buffersink_ctx,
@@ -111,7 +105,6 @@ static int init_video_filters(RawMediaDecoder* rmd, const RawMediaSession* sessi
                                      "out", NULL, buffersink_params,
                                      rmd->video.filter_graph);
     av_freep(&buffersink_params);
-#endif
     if (r < 0)
         goto error;
 
