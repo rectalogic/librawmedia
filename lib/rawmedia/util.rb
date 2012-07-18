@@ -6,7 +6,7 @@ module RawMedia
     # @param [FFI::Pointer] pointer
     # @param [Fixnum] size number of bytes pointer points to
     # @return [java.nio.ByteBuffer] ByteBuffer wrapping pointers memory
-    def self.wrap_pointer(pointer, size)
+    def self.wrap_pointer(pointer, size=pointer.size)
       org.jruby.ext.ffi.Factory.getInstance().
         wrapDirectMemory(JRuby.runtime, pointer.address).
         slice(0, size).asByteBuffer()
