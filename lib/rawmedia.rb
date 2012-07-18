@@ -13,6 +13,7 @@ require 'rational'
 
 require 'rawmedia/version'
 require 'rawmedia/errors'
+require 'rawmedia/util'
 require 'rawmedia/internal'
 require 'rawmedia/log'
 require 'rawmedia/session'

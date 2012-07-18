@@ -30,7 +30,6 @@ task :spec => [:lib, fixture_320x240_30fps, fixture_320x180_25fps]
 
 desc 'Run RSpec code examples with simplecov'
 RSpec::Core::RakeTask.new(:coverage) do |task|
-  task.rspec_opts = %{--color --format progress}
   task.rcov = true
   task.rcov_path = 'rspec'
   task.rcov_opts = '--require simplecov_start'

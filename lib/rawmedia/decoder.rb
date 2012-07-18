@@ -58,9 +58,7 @@ module RawMedia
     # Wraps video_buffer in a Java ByteBuffer.
     # @return [java.nio.ByteBuffer] Java buffer wrapping buffer
     def video_byte_buffer
-      org.jruby.ext.ffi.Factory.getInstance().
-        wrapDirectMemory(JRuby.runtime, video_buffer.address).
-        slice(0, video_buffer_size).asByteBuffer()
+      Util.wrap_pointer(video_buffer, video_buffer_size)
     end
 
     # Decode a frame of video.
