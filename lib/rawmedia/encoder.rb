@@ -10,7 +10,7 @@ module RawMedia
       config[:has_video] = has_video
       config[:has_audio] = has_audio
       encoder = Internal::rawmedia_create_encoder(filename, session.session, config)
-      raise(RawMediaError, "Failed to create Encoder for #{filename}") unless encoder
+      raise(RawMediaError, "Failed to create Encoder for #{filename}") if encoder.null?
       # Wrap in AutoPointer to manage lifetime
       @encoder = Internal::RawMediaEncoder.new(encoder)
     end

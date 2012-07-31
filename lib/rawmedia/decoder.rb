@@ -26,7 +26,7 @@ module RawMedia
       config[:discard_video] = opts[:discard_video]
       config[:discard_audio] = opts[:discard_audio]
       decoder = Internal::rawmedia_create_decoder(filename, session.session, config)
-      raise(RawMediaError, "Failed to create Decoder for #{filename}") unless decoder
+      raise(RawMediaError, "Failed to create Decoder for #{filename}") if decoder.null?
       # Wrap in AutoPointer to manage lifetime
       @decoder = Internal::RawMediaDecoder.new(decoder)
       info = Internal::rawmedia_get_decoder_info(@decoder)
