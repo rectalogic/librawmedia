@@ -8,7 +8,7 @@ module RawMedia
   module Rake
     # Rake task to generate a raw media file test fixture
     class VideoFixtureTask < ::Rake::TaskLib
-      #include ::Rake::DSL if defined?(::Rake::DSL)
+      include ::Rake::DSL if defined?(::Rake::DSL)
 
       # @return [String] the output file name, and task name
       attr_accessor :filename
@@ -25,7 +25,7 @@ module RawMedia
       # The environment variable FFMPEG can be used to locate the ffmpeg executable.
       # @param [String] filename the name of the output file and rake task
       # @yield a block to allow any options to be modified on the task
-      # @yieldparam [FixtureTask] _self the task object to allow any parameters
+      # @yieldparam [FixtureTask] self the task object to allow any parameters
       #   to be changed.
       def initialize(filename)
         @filename = filename
@@ -33,14 +33,14 @@ module RawMedia
         @size = '320x240'
         @duration = '5'
         yield self if block_given?
-        @ffmpeg = ENV['FFMPEG'] || 'ffmpeg'
+        @ffmpeg = ENV.fetch('FFMPEG', 'ffmpeg')
         define
       end
 
       def define
         desc "Generate a raw media MOV file fixture"
         file filename do
-          sh %{#@ffmpeg -f lavfi -i "aevalsrc=sin(440*2*PI*t)::s=8000,aconvert=s16:stereo" -f lavfi -i "testsrc=rate=#{framerate}:size=#{size}" -codec:a pcm_s16le -codec:v rawvideo -pix_fmt uyvy422 -tag:v yuvs -f mov -t #{duration} -y #{filename}}
+          sh %{"#@ffmpeg" -f lavfi -i "aevalsrc=sin(440*2*PI*t)::s=8000,aconvert=s16:stereo" -f lavfi -i "testsrc=rate=#{framerate}:size=#{size}:decimals=3" -codec:a pcm_s16le -codec:v rawvideo -pix_fmt uyvy422 -tag:v yuvs -f mov -t #{duration} -y "#{filename}"}
         end
       end
       protected :define
