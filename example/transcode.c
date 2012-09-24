@@ -3,7 +3,7 @@
 
 #define FRAME_RATE_NUM 30
 #define FRAME_RATE_DEN 1
-#define START_FRAME 15
+#define START_FRAME 0
 #define WIDTH 320
 #define HEIGHT 240
 
@@ -16,6 +16,8 @@ int main(int argc, const char *argv[]) {
     const char* output_filename = argv[2];
     const char* audio_filename = argv[3];
     const char* video_filename = argv[4];
+
+    rawmedia_init();
 
     RawMediaSession session = {
         .framerate_num = FRAME_RATE_NUM,
@@ -47,13 +49,13 @@ int main(int argc, const char *argv[]) {
 
     uint8_t *video_buffer = NULL;
     uint8_t audio_buffer[session.audio_framebuffer_size];
-    int width, height, video_buffer_size;
+    int width = 0, height = 0, video_buffer_size;
     for (int frame = 0; frame < info->duration; frame++) {
-        if (rawmedia_decode_video(rmd, &video_buffer, &width, &height, &video_buffer_size) < 0) {
+        if (info->has_video && rawmedia_decode_video(rmd, &video_buffer, &width, &height, &video_buffer_size) < 0) {
             fprintf(stderr, "Failed to decode video.\n");
             return -1;
         }
-        if (rawmedia_decode_audio(rmd, audio_buffer) < 0) {
+        if (info->has_audio && rawmedia_decode_audio(rmd, audio_buffer) < 0) {
             fprintf(stderr, "Failed to decode audio.\n");
             return -1;
         }
@@ -66,21 +68,25 @@ int main(int argc, const char *argv[]) {
                 return -1;
         }
 
-        if (rawmedia_encode_video(rme, video_buffer, video_buffer_size) < 0) {
-            fprintf(stderr, "Failed to encode video.\n");
-            return -1;
+        if (econfig.has_video) {
+            if (rawmedia_encode_video(rme, video_buffer, video_buffer_size) < 0) {
+                fprintf(stderr, "Failed to encode video.\n");
+                return -1;
+            }
+            if (fwrite(video_buffer, video_buffer_size, 1, video_fp) < 1) {
+                fprintf(stderr, "Failed to write video.\n");
+                return -1;
+            }
         }
-        if (rawmedia_encode_audio(rme, audio_buffer) < 0) {
-            fprintf(stderr, "Failed to encode audio.\n");
-            return -1;
-        }
-        if (fwrite(video_buffer, video_buffer_size, 1, video_fp) < 1) {
-            fprintf(stderr, "Failed to write video.\n");
-            return -1;
-        }
-        if (fwrite(audio_buffer, sizeof(audio_buffer), 1, audio_fp) < 1) {
-            fprintf(stderr, "Failed to write audio.\n");
-            return -1;
+        if (econfig.has_audio) {
+            if (rawmedia_encode_audio(rme, audio_buffer) < 0) {
+                fprintf(stderr, "Failed to encode audio.\n");
+                return -1;
+            }
+            if (fwrite(audio_buffer, sizeof(audio_buffer), 1, audio_fp) < 1) {
+                fprintf(stderr, "Failed to write audio.\n");
+                return -1;
+            }
         }
     }
 

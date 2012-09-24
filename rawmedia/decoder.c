@@ -101,7 +101,7 @@ static int init_video_filters(RawMediaDecoder* rmd, const RawMediaSession* sessi
     AVBufferSinkParams *buffersink_params = av_buffersink_params_alloc();
     buffersink_params->pixel_fmts = pixel_fmts;
     r = avfilter_graph_create_filter(&rmd->video.buffersink_ctx,
-                                     avfilter_get_by_name("buffersink"),
+                                     avfilter_get_by_name("ffbuffersink"),
                                      "out", NULL, buffersink_params,
                                      rmd->video.filter_graph);
     av_freep(&buffersink_params);
@@ -180,7 +180,7 @@ static int init_audio_filters(RawMediaDecoder* rmd, const RawMediaDecoderConfig*
     abuffersink_params->sample_fmts = sample_fmts;
     abuffersink_params->channel_layouts = chlayouts;
     r = avfilter_graph_create_filter(&rmd->audio.abuffersink_ctx,
-                                     avfilter_get_by_name("abuffersink"),
+                                     avfilter_get_by_name("ffabuffersink"),
                                      "out", NULL, abuffersink_params,
                                      rmd->audio.filter_graph);
     av_freep(&abuffersink_params);
@@ -467,7 +467,7 @@ static int read_packet(RawMediaDecoder* rmd, int stream_index, AVPacket* pkt) {
 
     if (r == AVERROR_EOF) {
         if (stream_index == rmd->video.stream_index) {
-            AVCodec* codec = get_avstream(rmd, rmd->video.stream_index)->codec->codec;
+            const AVCodec* codec = get_avstream(rmd, rmd->video.stream_index)->codec->codec;
             if (codec->capabilities & CODEC_CAP_DELAY)
                 rmd->video.status = SS_EOF_PENDING;
             else
@@ -475,7 +475,7 @@ static int read_packet(RawMediaDecoder* rmd, int stream_index, AVPacket* pkt) {
             goto empty_packet;
         }
         else if (stream_index == rmd->audio.stream_index) {
-            AVCodec* codec = get_avstream(rmd, rmd->audio.stream_index)->codec->codec;
+            const AVCodec* codec = get_avstream(rmd, rmd->audio.stream_index)->codec->codec;
             if (codec->capabilities & CODEC_CAP_DELAY)
                 rmd->audio.status = SS_EOF_PENDING;
             else
