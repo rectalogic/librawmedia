@@ -3,7 +3,6 @@
 
 require 'rubygems'
 require 'bundler'
-Bundler::GemHelper.install_tasks
 require 'rspec/core/rake_task'
 require 'rawmedia/rake/video_fixture_task'
 require 'ffi'
@@ -22,6 +21,10 @@ fixture_320x180_25fps = 'spec/fixtures/320x180-25fps.mov'
 
 desc "Build native library during development"
 task :lib => libname
+
+namespace :gem do
+  Bundler::GemHelper.install_tasks
+end
 
 RSpec::Core::RakeTask.new(:spec) do |task|
   task.rspec_opts = %{--color --format progress}
