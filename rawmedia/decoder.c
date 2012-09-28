@@ -26,6 +26,7 @@ struct RawMediaDecoder {
         int stream_index;
         PacketQueue packetq;
         AVFrame* avframe;
+        AVPacket pkt;
         uint32_t current_frame;     // Frame number we are decoding
         uint32_t frame_duration;    // Frame duration in video timebase
         AVFilterContext* buffersink_ctx;
@@ -405,6 +406,7 @@ int rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
                 r = r || rc;
                 packet_queue_flush(&rmd->video.packetq);
                 av_free(rmd->video.avframe);
+                av_free_packet(&rmd->video.pkt);
             }
             if (rmd->audio.stream_index != INVALID_STREAM) {
                 avfilter_unref_buffer(rmd->audio.samplesref);
@@ -504,13 +506,20 @@ static int64_t video_expected_pts(RawMediaDecoder* rmd) {
 static int decode_video_frame(RawMediaDecoder* rmd) {
     int r = 0;
     AVCodecContext *video_ctx = get_avstream(rmd, rmd->video.stream_index)->codec;
-    AVPacket pkt;
+    AVPacket* pkt = &rmd->video.pkt;
     int got_picture = 0;
-    while (!got_picture && (r = read_packet(rmd, rmd->video.stream_index, &pkt)) >= 0) {
+
+    // Free packet from previous frame.
+    // AVFrame.data can be the same pointer as AVPacket.data in the
+    // case where the pix_fmts are the same.
+    av_free_packet(pkt);
+
+    while (!got_picture && (r = read_packet(rmd, rmd->video.stream_index, pkt)) >= 0) {
         avcodec_get_frame_defaults(rmd->video.avframe);
-        if ((r = avcodec_decode_video2(video_ctx, rmd->video.avframe, &got_picture, &pkt)) < 0)
+        if ((r = avcodec_decode_video2(video_ctx, rmd->video.avframe, &got_picture, pkt)) < 0)
             return r;
-        av_free_packet(&pkt);
+        if (!got_picture)
+            av_free_packet(pkt);
         if (rmd->video.status == SS_EOF)
             return got_picture;
     }
@@ -605,7 +614,6 @@ done:
 static int decode_partial_audio_frame(RawMediaDecoder* rmd) {
     int r = 0;
     AVCodecContext *audio_ctx = get_avstream(rmd, rmd->audio.stream_index)->codec;
-    AVPacket* pkt = &rmd->audio.pkt;
     AVPacket* pkt_partial = &rmd->audio.pkt_partial;
     int got_frame = 0;
     while (pkt_partial->size > 0) {
@@ -620,7 +628,6 @@ static int decode_partial_audio_frame(RawMediaDecoder* rmd) {
 
     // Partial packet is now empty, reset
     memset(pkt_partial, 0, sizeof(*pkt_partial));
-    av_free_packet(pkt);
     return 0;
 }
 
@@ -634,6 +641,9 @@ static int decode_audio_frame(RawMediaDecoder* rmd) {
         // Read anything left in partial, return on error or got frame
         if ((r = decode_partial_audio_frame(rmd)))
             return r;
+
+        av_free_packet(pkt);
+
         // If partial exausted and no frame, read a new packet and try again
         if ((r = read_packet(rmd, rmd->audio.stream_index, pkt)) >= 0)
             *pkt_partial = *pkt;
