@@ -1,13 +1,5 @@
 require_relative "lib/rawmedia/version"
 
-git = system('git rev-parse')
-if git
-  git_tag = `git describe`.chop
-  if RawMedia::VERSION != git_tag
-    puts "WARNING: RawMedia VERSION #{RawMedia::VERSION} does not match git tag #{git_tag}"
-  end
-end
-
 Gem::Specification.new do |s|
   s.name        = "rawmedia"
   s.version     = RawMedia::VERSION
@@ -22,11 +14,10 @@ Gem::Specification.new do |s|
   s.add_development_dependency 'simplecov', '~> 0.6.4'
   s.add_development_dependency 'rake', '~> 0.9.0'
 
-  if git
+  if system('git rev-parse')
     s.files     = `git ls-files`.split("\n")
   else
-    s.files     = Dir.glob("{ext,lib,rawmedia,spec,example}/**/*") +
-      %w(LICENSE README.md CMakeLists.txt Gemfile Rakefile)
+    s.files     = Dir.glob('**/*')
   end
 
   s.extensions  = ['ext/rawmedia/extconf.rb']

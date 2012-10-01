@@ -24,6 +24,35 @@ task :lib => libname
 
 namespace :gem do
   Bundler::GemHelper.install_tasks
+
+  task :validate_tag, [:tag] do |t, args|
+    require_relative 'lib/rawmedia/version'
+    if args.tag
+      tag = args.tag
+      alert = :fail
+    else
+      tag = `git describe --dirty`.chop
+      alert = :warn
+    end
+    send(alert, "WARNING: RawMedia version #{RawMedia::VERSION} does not match tag #{tag}") unless tag == RawMedia::VERSION
+  end
+
+  task :build, [:tag] => 'gem:validate_tag'
+
+  describe 'Package gem using given tag'
+  task :package, [:tag] do |t, args|
+    tag = args.tag
+    fail "Must supply tag argument" unless tag
+    pkg = File.expand_path('../pkg', __FILE__)
+    prefix = "rawmedia-#{tag}"
+    mkdir_p(pkg)
+
+    sh %Q(git archive --prefix="#{prefix}/" #{tag} | tar -C "#{pkg}" -xf -)
+    build = File.join(pkg, prefix)
+    sh({ 'BUNDLE_GEMFILE' => nil },
+       %Q(cd "#{build}" && rake gem:build[#{tag}]))
+    mv File.join(build, 'pkg', "#{prefix}.gem"), pkg
+  end
 end
 
 RSpec::Core::RakeTask.new(:spec) do |task|
