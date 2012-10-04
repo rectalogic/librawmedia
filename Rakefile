@@ -39,7 +39,7 @@ namespace :gem do
 
   task :build, [:tag] => 'gem:validate_tag'
 
-  describe 'Package gem using given tag'
+  desc 'Package gem using given tag'
   task :package, [:tag] do |t, args|
     tag = args.tag
     fail "Must supply tag argument" unless tag

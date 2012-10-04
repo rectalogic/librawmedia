@@ -1,4 +1,7 @@
-require_relative "lib/rawmedia/version"
+lib = File.expand_path('../lib/', __FILE__)
+$:.unshift lib unless $:.include?(lib)
+
+require 'rawmedia/version'
 
 Gem::Specification.new do |s|
   s.name        = "rawmedia"
