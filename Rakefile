@@ -3,8 +3,6 @@
 
 require 'rubygems'
 require 'bundler'
-require 'rspec/core/rake_task'
-require 'rawmedia/rake/video_fixture_task'
 require 'ffi'
 
 libname = "lib/#{FFI::Platform::LIBPREFIX}rawmedia.#{FFI::Platform::LIBSUFFIX}"
@@ -15,9 +13,6 @@ file libname => Dir.glob("rawmedia/*{.h,.c}") do
     sh "make && make install"
   end
 end
-
-fixture_320x240_30fps = 'spec/fixtures/320x240-30fps.mov'
-fixture_320x180_25fps = 'spec/fixtures/320x180-25fps.mov'
 
 desc "Build native library during development"
 task :lib => libname
@@ -38,6 +33,7 @@ namespace :gem do
   end
 
   task :build, [:tag] => 'gem:validate_tag'
+  task :install, [:tag] => 'gem:validate_tag'
 
   desc 'Package gem using given tag'
   task :package, [:tag] do |t, args|
@@ -55,31 +51,42 @@ namespace :gem do
   end
 end
 
-RSpec::Core::RakeTask.new(:spec) do |task|
-  task.rspec_opts = %{--color --format progress}
-end
-task :spec => [:lib, fixture_320x240_30fps, fixture_320x180_25fps]
+begin
+  require 'rspec/core/rake_task'
+  require_relative 'lib/rawmedia/rake/video_fixture_task'
 
-desc 'Run RSpec code examples with simplecov'
-RSpec::Core::RakeTask.new(:coverage) do |task|
-  task.rcov = true
-  task.rcov_path = 'rspec'
-  task.rcov_opts = '--require simplecov_start'
-end
-task :coverage => [:lib, fixture_320x240_30fps, fixture_320x180_25fps]
+  fixture_320x240_30fps = 'spec/fixtures/320x240-30fps.mov'
+  fixture_320x180_25fps = 'spec/fixtures/320x180-25fps.mov'
 
-directory 'spec/fixtures'
+  RSpec::Core::RakeTask.new(:spec) do |task|
+    task.rspec_opts = %{--color --format progress}
+  end
+  task :spec => [:lib, fixture_320x240_30fps, fixture_320x180_25fps]
 
-RawMedia::Rake::VideoFixtureTask.new(fixture_320x240_30fps) do |task|
-  task.framerate = '30'
-  task.size = '320x240'
-end
-task fixture_320x240_30fps => 'spec/fixtures'
-RawMedia::Rake::VideoFixtureTask.new(fixture_320x180_25fps) do |task|
-  task.framerate = '25'
-  task.size = '320x180'
-end
-task fixture_320x180_25fps => 'spec/fixtures'
+  desc 'Run RSpec code examples with simplecov'
+  RSpec::Core::RakeTask.new(:coverage) do |task|
+    task.rcov = true
+    task.rcov_path = 'rspec'
+    task.rcov_opts = '--require simplecov_start'
+  end
+  task :coverage => [:lib, fixture_320x240_30fps, fixture_320x180_25fps]
 
-desc "Generate all media fixtures"
-task :fixtures => [fixture_320x240_30fps, fixture_320x180_25fps]
+  directory 'spec/fixtures'
+
+  RawMedia::Rake::VideoFixtureTask.new(fixture_320x240_30fps) do |task|
+    task.framerate = '30'
+    task.size = '320x240'
+  end
+  task fixture_320x240_30fps => 'spec/fixtures'
+  RawMedia::Rake::VideoFixtureTask.new(fixture_320x180_25fps) do |task|
+    task.framerate = '25'
+    task.size = '320x180'
+  end
+  task fixture_320x180_25fps => 'spec/fixtures'
+
+  desc "Generate all media fixtures"
+  task :fixtures => [fixture_320x240_30fps, fixture_320x180_25fps]
+
+rescue LoadError
+  warn 'Ignoring rspec tasks'
+end
