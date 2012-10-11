@@ -194,11 +194,24 @@ int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input, int inputs
     video->avframe->data[0] = (uint8_t*)input;
     video->avframe->linesize[0] = inputsize / codec_ctx->height;
 
+    av_init_packet(&pkt);
+
     int got_packet = 0;
     if ((r = avcodec_encode_video2(codec_ctx, &pkt, video->avframe, &got_packet)) < 0)
         return r;
     if (!got_packet)
         return 0;
+    if (pkt.pts != AV_NOPTS_VALUE) {
+        pkt.pts = av_rescale_q(pkt.pts,
+                               codec_ctx->time_base,
+                               video->avstream->time_base);
+    }
+    if (pkt.dts != AV_NOPTS_VALUE) {
+        pkt.dts = av_rescale_q(pkt.dts,
+                               codec_ctx->time_base,
+                               video->avstream->time_base);
+    }
+
     pkt.stream_index = video->avstream->index;
     if ((r = av_interleaved_write_frame(rme->format_ctx, &pkt)) < 0)
         return r;
@@ -207,6 +220,8 @@ int rawmedia_encode_video(RawMediaEncoder* rme, const uint8_t* input, int inputs
 
     video->avframe->data[0] = NULL;
     video->avframe->linesize[0] = 0;
+
+    av_free_packet(&pkt);
 
     return r;
 }
