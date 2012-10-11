@@ -9,7 +9,7 @@
 // Formats decoded by decoder and expected by encoder
 
 // Only use packed pixel formats
-#define RAWMEDIA_VIDEO_PIXEL_FORMAT PIX_FMT_UYVY422
+#define RAWMEDIA_VIDEO_PIXEL_FORMAT AV_PIX_FMT_UYVY422
 #define RAWMEDIA_AUDIO_SAMPLE_FMT AV_SAMPLE_FMT_S16
 #define RAWMEDIA_AUDIO_DATATYPE int16_t
 #define RAWMEDIA_AUDIO_SAMPLE_MIN -32768

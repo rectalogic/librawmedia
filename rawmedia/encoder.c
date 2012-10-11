@@ -160,12 +160,12 @@ int rawmedia_destroy_encoder(RawMediaEncoder* rme) {
             if (rme->video.avstream) {
                 rc = avcodec_close(rme->video.avstream->codec);
                 r = r || rc;
-                av_free(rme->video.avframe);
+                avcodec_free_frame(&rme->video.avframe);
             }
             if (rme->audio.avstream) {
                 rc = avcodec_close(rme->audio.avstream->codec);
                 r = r || rc;
-                av_free(rme->audio.avframe);
+                avcodec_free_frame(&rme->audio.avframe);
             }
             // Close output file
             if (!(format_ctx->flags & AVFMT_NOFILE) && format_ctx->pb) {

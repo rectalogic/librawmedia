@@ -75,8 +75,8 @@ static int init_video_filters(RawMediaDecoder* rmd, const RawMediaSession* sessi
     AVCodecContext* video_ctx = stream->codec;
     AVFilterInOut* outputs = NULL;
     AVFilterInOut* inputs = NULL;
-    static const enum PixelFormat pixel_fmts[] = { RAWMEDIA_VIDEO_PIXEL_FORMAT,
-                                                   PIX_FMT_NONE };
+    static const enum AVPixelFormat pixel_fmts[] = { RAWMEDIA_VIDEO_PIXEL_FORMAT,
+                                                     AV_PIX_FMT_NONE };
 
     if (!(rmd->video.filter_graph = avfilter_graph_alloc())) {
         r = -1;
@@ -405,7 +405,7 @@ int rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
                 rc = avcodec_close(get_avstream(rmd, rmd->video.stream_index)->codec);
                 r = r || rc;
                 packet_queue_flush(&rmd->video.packetq);
-                av_free(rmd->video.avframe);
+                avcodec_free_frame(&rmd->video.avframe);
                 av_free_packet(&rmd->video.pkt);
             }
             if (rmd->audio.stream_index != INVALID_STREAM) {
@@ -414,7 +414,7 @@ int rawmedia_destroy_decoder(RawMediaDecoder* rmd) {
                 rc = avcodec_close(get_avstream(rmd, rmd->audio.stream_index)->codec);
                 r = r || rc;
                 packet_queue_flush(&rmd->audio.packetq);
-                av_free(rmd->audio.avframe);
+                avcodec_free_frame(&rmd->audio.avframe);
                 // Don't free audio.pkt_partial, it's a copy of audio.pkt
                 av_free_packet(&rmd->audio.pkt);
             }
@@ -590,7 +590,7 @@ int rawmedia_decode_video(RawMediaDecoder* rmd, uint8_t** output, int* width, in
     }
 
     // If we decoded a new frame, filter it
-    if (video->avframe->format != PIX_FMT_NONE) {
+    if (video->avframe->format != AV_PIX_FMT_NONE) {
         if ((r = filter_video(rmd)) < 0)
             return r;
         video->current_frame++;
