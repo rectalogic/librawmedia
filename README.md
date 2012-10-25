@@ -1,6 +1,6 @@
 # Overview
 
-librawmedia provides a simplified API on top of ffmpeg for decoding
+librawmedia provides a simplified API on top of FFmpeg for decoding
 frames of video and corresponding audio into raw buffers which can
 then be manipulated before multiplexing into an output MOV file.
 
@@ -11,7 +11,15 @@ A Ruby wrapper built using FFI is included.
 librawmedia is currently a work in progress and incomplete.
 It's main purpose is for use with [RenderMix](https://github.com/rectalogic/rendermix)
 
-Currently working with ffmpeg as of commit 9586db6
+Currently working with FFmpeg as of commit 9586db6
+
+## Building
+
+Building librawmedia requires cmake.
+Use `rake gem:install` to build and install the gem.
+If FFmpeg is installed in a non-standard location, set `PKG_CONFIG_PATH`:
+
+    PKG_CONFIG_PATH=<ffmpeg-install-dir>/lib/pkgconfig rake gem:install
 
 ## License
 
