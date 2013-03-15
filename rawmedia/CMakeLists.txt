@@ -18,6 +18,10 @@ add_library(rawmedia SHARED
 target_link_libraries(rawmedia ${FFMPEG_LIBRARIES})
 target_link_libraries(rawmedia LINK_INTERFACE_LIBRARIES "")
 
+set(pkgconfigfile "${CMAKE_BINARY_DIR}/librawmedia.pc")
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/librawmedia.pc.in" "${pkgconfigfile}" @ONLY)
+
+install(FILES "${pkgconfigfile}" DESTINATION "lib/pkgconfig" COMPONENT pkgconfig)
 install(FILES rawmedia.h DESTINATION include COMPONENT headers)
 install(TARGETS rawmedia
   RUNTIME DESTINATION bin COMPONENT libraries
